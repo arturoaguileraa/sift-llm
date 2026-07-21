@@ -39,10 +39,18 @@ while keeping the response useful.
 
 ## Install
 
+### Binary (recommended)
+
+Install the pre-compiled binary for macOS or Linux with a single command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/arturoaguileraa/sift-llm/main/install.sh | bash
+```
+
 ### From source
 
 ```bash
-git clone https://github.com/<you>/sift-llm.git
+git clone https://github.com/arturoaguileraa/sift-llm.git
 cd sift-llm
 cargo build --release
 # binary is at ./target/release/sift

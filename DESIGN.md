@@ -202,13 +202,16 @@ sift-llm/
 ## 13. Instalación y uso
 
 ```bash
-# build
-git clone <repo> && cd sift-llm
+# Instalación binaria directa (macOS / Linux):
+curl -fsSL https://raw.githubusercontent.com/arturoaguileraa/sift-llm/main/install.sh | bash
+
+# O desde código fuente:
+git clone https://github.com/arturoaguileraa/sift-llm.git && cd sift-llm
 cargo build --release
 
 # arrancar el gateway (daemon persistente en :8787)
 export ANTHROPIC_API_KEY=sk-ant-...
-./target/release/sift serve --config policies.yaml
+sift serve --config policies.yaml
 
 # registrar proveedores: picker interactivo (populares + URL personalizada)
 sift provider add                       # menú interactivo

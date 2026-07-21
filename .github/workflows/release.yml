@@ -1,0 +1,89 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Create Draft Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+
+  build-release:
+    name: Build & Upload Release Binaries
+    needs: create-release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            use_cross: false
+          - target: x86_64-apple-darwin
+            os: macos-13
+            use_cross: false
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            use_cross: false
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            use_cross: true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross (if cross-compiling)
+        if: ${{ matrix.use_cross }}
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build binary
+        run: |
+          if [ "${{ matrix.use_cross }}" = "true" ]; then
+            cross build --release --target ${{ matrix.target }}
+          else
+            cargo build --release --target ${{ matrix.target }}
+          fi
+
+      - name: Package archive
+        shell: bash
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          STAGE_DIR=$(mktemp -d)
+          cp target/${{ matrix.target }}/release/sift "${STAGE_DIR}/sift"
+          cp README.md LICENSE policies.example.yaml "${STAGE_DIR}/" 2>/dev/null || true
+          
+          TARBALL_VERSION="sift-${TAG}-${{ matrix.target }}.tar.gz"
+          TARBALL_GENERIC="sift-${{ matrix.target }}.tar.gz"
+          
+          tar -czf "${TARBALL_VERSION}" -C "${STAGE_DIR}" .
+          cp "${TARBALL_VERSION}" "${TARBALL_GENERIC}"
+          
+          shasum -a 256 "${TARBALL_VERSION}" > "${TARBALL_VERSION}.sha256"
+          shasum -a 256 "${TARBALL_GENERIC}" > "${TARBALL_GENERIC}.sha256"
+
+      - name: Upload binaries to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            sift-*.tar.gz
+            sift-*.sha256
