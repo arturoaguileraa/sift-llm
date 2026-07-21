@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Mock `sift` CLI for the demo gif. Output is PLAIN; the typed command is
+# coloured by zsh-syntax-highlighting in the terminal instead.
+#   sift serve                 start the gateway (proxy)
+#   sift provider add          interactive picker (famous providers + custom URL)
+#   sift provider add --url U   register a custom OpenAI-compatible endpoint
+#   sift models                list models exposed to the connected agent
+#   sift scan <file>           one-off diagnostic redaction
+set -euo pipefail
+
+GREEN=$'\033[38;2;166;227;161m'   # only colour used in output: the "active" badge
+OFF=$'\033[0m'
+
+cmd="${1:-}"
+
+case "$cmd" in
+  serve)
+    printf 'sift gateway\n'
+    printf '%s● active%s   http://localhost:8787   (shadow mode)\n' "$GREEN" "$OFF"
+    ;;
+
+  provider)
+    if [[ "${3:-}" == "--url" ]]; then
+      printf '✓ custom provider added  (%s, key held locally)\n' "${4:-}"
+      exit 0
+    fi
+    choice=$(gum choose --height 9 --header "Add a provider:" \
+      "Anthropic" "OpenAI" "Google (Gemini)" "Groq" "Mistral" "Ollama (local)" \
+      "Custom (paste URL)…")
+    if [[ "$choice" == Custom* ]]; then
+      url=$(gum input --header "Endpoint URL:" --placeholder "https://api.your-provider.com/v1")
+      printf '✓ custom provider added  (%s, key held locally)\n' "$url"
+    else
+      printf "✓ provider '%s' added  (key held locally)\n" "$choice"
+    fi
+    ;;
+
+  models)
+    printf '%-20s %-12s %s\n' "MODEL" "PROVIDER" "STATUS"
+    printf '%-20s %-12s %s\n' "claude-sonnet-4-6" "anthropic" "(Sift secured)"
+    printf '%-20s %-12s %s\n' "claude-opus-4-8"   "anthropic" "(Sift secured)"
+    printf '%-20s %-12s %s\n' "llama-3.3-70b"     "groq"      "(Sift secured)"
+    ;;
+
+  scan)
+    file="${2:-}"
+    content="$(cat "$file")"
+    printf 'sift scan %s\n\n' "$file"
+    echo "$content" | grep -qE '(ghp_[A-Za-z0-9]+|sk-[A-Za-z0-9-]+)' && printf '  api_key   BLOCK\n'
+    echo "$content" | grep -qE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' && printf '  email     REDACT\n'
+    printf '\n-- redacted prompt sent upstream --\n'
+    echo "$content" | sed -E \
+      -e 's/(ghp_[A-Za-z0-9]+|sk-[A-Za-z0-9-]+)/[API_KEY_REDACTED]/g' \
+      -e 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/[EMAIL_REDACTED]/g'
+    ;;
+
+  *)
+    echo "usage: sift <serve|provider|models|scan>"
+    exit 1
+    ;;
+esac

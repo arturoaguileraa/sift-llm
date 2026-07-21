@@ -1,0 +1,8 @@
+{
+  "provider": {
+    "sift": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": { "baseURL": "http://localhost:8787/v1" }
+    }
+  }
+}
