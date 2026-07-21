@@ -1,0 +1,17 @@
+# Sift Policy Configuration Example
+# Mode: shadow (audit only, do not alter prompt) | enforce (apply redactions/blocks)
+mode: shadow
+
+policies:
+  api_key:           block          # secrets: block or redact
+  private_key:       block
+  password:          block
+  credit_card:       block
+  connection_string: redact
+  email:             redact         # replaced with placeholder tag
+  person_name:       redact
+  ip_address:        pass           # left untouched
+
+allowlist:
+  - "example.com"
+  - "127.0.0.1"

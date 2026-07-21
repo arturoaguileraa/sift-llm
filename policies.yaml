@@ -1,0 +1,16 @@
+# Sift Policy Configuration
+mode: shadow
+
+policies:
+  api_key:           block
+  private_key:       block
+  password:          block
+  credit_card:       block
+  connection_string: redact
+  email:             redact
+  person_name:       redact
+  ip_address:        pass
+
+allowlist:
+  - "example.com"
+  - "127.0.0.1"
