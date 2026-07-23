@@ -8,11 +8,19 @@ pub struct Provider {
     pub name: String,
     pub base_url: String,
     pub key_env: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub api_key: Option<String>,
     pub models: Vec<String>,
 }
 
 impl Provider {
     pub fn get_api_key(&self) -> Option<String> {
+        if let Some(ref key) = self.api_key {
+            if !key.is_empty() {
+                return Some(key.clone());
+            }
+        }
         if self.key_env.is_empty() {
             return None;
         }
@@ -75,6 +83,7 @@ impl Default for ProviderRegistry {
                     name: "anthropic".to_string(),
                     base_url: "https://api.anthropic.com/v1".to_string(),
                     key_env: "ANTHROPIC_API_KEY".to_string(),
+                    api_key: None,
                     models: vec![
                         "claude-3-5-sonnet-20241022".to_string(),
                         "claude-3-opus-20240229".to_string(),
@@ -85,6 +94,7 @@ impl Default for ProviderRegistry {
                     name: "openai".to_string(),
                     base_url: "https://api.openai.com/v1".to_string(),
                     key_env: "OPENAI_API_KEY".to_string(),
+                    api_key: None,
                     models: vec![
                         "gpt-4o".to_string(),
                         "gpt-4o-mini".to_string(),
@@ -95,6 +105,7 @@ impl Default for ProviderRegistry {
                     name: "groq".to_string(),
                     base_url: "https://api.groq.com/openai/v1".to_string(),
                     key_env: "GROQ_API_KEY".to_string(),
+                    api_key: None,
                     models: vec![
                         "llama-3.3-70b-versatile".to_string(),
                         "llama-3.1-8b-instant".to_string(),
@@ -176,6 +187,7 @@ mod tests {
             name: name.to_string(),
             base_url: url.to_string(),
             key_env: String::new(),
+            api_key: None,
             models: vec![],
         }
     }
