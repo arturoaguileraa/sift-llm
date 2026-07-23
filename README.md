@@ -10,12 +10,10 @@ data from your prompts before they ever leave your machine.
 ![Sift demo](docs/demo.gif)
 
 <!--
-  Preview only: launch the gateway, add providers, then OpenCode lists every
-  discovered model as "<id> PII secured by Sift".
-  Generated from mock `sift`/`opencode` in docs/preview/, to be regenerated
-  from the real binary once Phase 1 lands.
-  Regenerate (needs vhs + gum + zsh-syntax-highlighting):
-  cd docs/preview && vhs preview.tape
+  Recorded from the real `sift` binary: serve, models, the live /v1/models
+  endpoint, and enforce-mode redaction. Regenerate (needs vhs +
+  zsh-syntax-highlighting):
+  cargo build && vhs docs/demo.tape
 -->
 
 ---
@@ -164,9 +162,9 @@ environment, never in the agent's config.
 | `sift models` | List every model exposed to the agent, each tagged `(Sift secured)`. |
 | `sift scan <file>` | One-off diagnostic: show what would be detected/redacted. Not the proxy, just a tool to test your policy. |
 
-The demo gif above shows `serve` + `provider add` + `models`. The proxy itself is
-invisible in normal use: you start `sift serve` once, point your agent at it, and it
-protects every request automatically in the background.
+The demo gif above shows `serve`, `models`, the live `/v1/models` endpoint, and
+`scan` redacting a file. In normal use the proxy is invisible: you start `sift serve`
+once, point your agent at it, and it protects every request automatically.
 
 ## Roadmap
 

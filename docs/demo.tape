@@ -1,48 +1,55 @@
-# Sift demo recording — generate with:  vhs docs/demo.tape
-# Requires: https://github.com/charmbracelet/vhs  (brew install vhs)
-# Adjust the commands to match the real CLI once Phase 1 lands.
+# Sift demo recording — driven by the REAL `sift` binary (no mocks).
+# Requires: brew install vhs zsh-syntax-highlighting
+# Build first, then run from the repo root:
+#   cargo build && vhs docs/demo.tape
 
-Output docs/demo.gif
+Output "docs/demo.gif"
 
+Set Shell "zsh"
 Set FontSize 18
-Set Width 1200
-Set Height 720
-Set Padding 20
-Set Theme "Dracula"
-Set TypingSpeed 60ms
+Set Width 1160
+Set Height 900
+Set Padding 24
+Set Theme "Catppuccin Mocha"
+Set TypingSpeed 35ms
 
-# --- Intro -------------------------------------------------------------
-Type "# Sift: strip PII before it leaves your machine"
-Enter
-Sleep 800ms
+Hide
+Type "source /opt/homebrew/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh" Enter
+Type "setopt interactive_comments" Enter
+Type "ZSH_HIGHLIGHT_STYLES[command]='fg=#cba6f7,bold'" Enter
+Type "ZSH_HIGHLIGHT_STYLES[precommand]='fg=#cba6f7,bold'" Enter
+Type "export PATH=$PWD/target/debug:/opt/homebrew/bin:$PATH" Enter
+Type "clear" Enter
+Show
 
-# --- Start the gateway -------------------------------------------------
-Type "export ANTHROPIC_API_KEY=sk-ant-***   # real key stays local"
+Type "# 1. Launch the gateway (your API keys never leave this machine)" Enter
+Sleep 500ms
+Type "sift serve --config policies.yaml &" Enter
+Sleep 1700ms
+
 Enter
 Sleep 400ms
-Type "sift --config policies.yaml"
-Enter
-Sleep 1200ms
-# (expected: 'Sift listening on http://localhost:8787  [mode: shadow]')
 
-# --- Show a prompt that contains a secret ------------------------------
-Type "# A prompt with a real secret and an email"
-Enter
+Type "# 2. Every model it exposes is PII-secured" Enter
 Sleep 500ms
-Type 'echo "deploy with token ghp_S3cr3tT0k3n and notify juan@empresa.com" | sift scan'
-Enter
-Sleep 1500ms
-# (expected shadow output:)
-#   [detect] api_key     -> would BLOCK   ghp_****
-#   [detect] email       -> would REDACT  [EMAIL_REDACTED]
+Type "sift models" Enter
+Sleep 1900ms
 
-# --- Same request through the proxy ------------------------------------
-Type "# Now the same flowing through the gateway from opencode"
 Enter
-Sleep 600ms
-Type "opencode run 'summarize deploy.sh'"
-Enter
+Sleep 400ms
+
+Type "# 3. It answers as a real OpenAI-compatible endpoint" Enter
+Sleep 500ms
+Type "curl -s localhost:8787/v1/models | python3 -m json.tool | head -9" Enter
 Sleep 2000ms
-# (expected: response comes back; secrets never reached the provider)
 
-Sleep 1500ms
+Enter
+Sleep 400ms
+
+Type "# 4. Nothing sensitive leaves: redaction in action" Enter
+Sleep 500ms
+Type "sift scan --config docs/demo.policies.yaml docs/leak.sample.txt" Enter
+Sleep 2800ms
+
+Hide
+Type "kill %1 2>/dev/null" Enter

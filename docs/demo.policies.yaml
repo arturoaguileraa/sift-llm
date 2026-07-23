@@ -1,0 +1,7 @@
+# Demo policy (enforce) used by the README gif.
+mode: enforce
+policies:
+  api_key: block
+  connection_string: redact
+  email: redact
+allowlist: []
