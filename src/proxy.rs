@@ -47,8 +47,18 @@ pub async fn run_proxy(port: u16, policy_engine: PolicyEngine) -> Result<(), Box
     Ok(())
 }
 
-async fn handle_health() -> &'static str {
-    "OK"
+async fn handle_health() -> impl IntoResponse {
+    let pid = std::process::id();
+    let body = serde_json::json!({
+        "status": "ok",
+        "name": "sift-llm",
+        "pid": pid
+    });
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json")],
+        serde_json::to_string(&body).unwrap(),
+    )
 }
 
 async fn handle_models(State(state): State<AppState>) -> impl IntoResponse {
