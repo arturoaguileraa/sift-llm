@@ -75,10 +75,10 @@ async fn handle_models(State(state): State<AppState>) -> impl IntoResponse {
 async fn handle_chat_completions(
     State(state): State<AppState>,
     headers: HeaderMap,
-    mut request: Request,
+    request: Request,
 ) -> Response {
     // 1. Read Request Body
-    let body_bytes = match axum::body::to_bytes(request.body_mut(), 1024 * 1024 * 10).await {
+    let body_bytes = match axum::body::to_bytes(request.into_body(), 1024 * 1024 * 10).await {
         Ok(bytes) => bytes,
         Err(e) => {
             return (StatusCode::BAD_REQUEST, format!("Failed to read request body: {}", e)).into_response();
