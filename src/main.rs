@@ -1,4 +1,18 @@
+mod detect;
+mod policy;
+mod provider;
+mod audit;
+mod proxy;
+
 use clap::{Parser, Subcommand};
+use std::fs;
+use std::path::Path;
+use colored::Colorize;
+
+use detect::RegexDetector;
+use policy::PolicyEngine;
+use provider::ProviderRegistry;
+use proxy::run_proxy;
 
 #[derive(Parser)]
 #[command(name = "sift")]
@@ -43,6 +57,8 @@ enum ProviderCommands {
     /// Add a new upstream LLM provider
     Add {
         #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
         url: Option<String>,
         #[arg(long)]
         key_env: Option<String>,
@@ -53,28 +69,100 @@ enum ProviderCommands {
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt::init();
     let cli = Cli::parse();
 
     match cli.command {
         Commands::Serve { config, port } => {
-            println!("Starting Sift gateway on http://localhost:{} [config: {}]", port, config);
+            let policy_engine = PolicyEngine::load_or_default(&config);
+            println!(
+                "{} Sift starting in {} mode [config: {}]",
+                "==>".blue().bold(),
+                format!("{:?}", policy_engine.config.mode).green().bold(),
+                config
+            );
+            if let Err(e) = run_proxy(port, policy_engine).await {
+                eprintln!("{}: {}", "Error starting proxy".red().bold(), e);
+                std::process::exit(1);
+            }
         }
         Commands::Scan { file, config } => {
-            println!("Scanning file '{}' with policy '{}'...", file, config);
+            let policy_engine = PolicyEngine::load_or_default(&config);
+            let detector = RegexDetector::new();
+            let file_path = Path::new(&file);
+
+            if !file_path.exists() {
+                eprintln!("{}: File '{}' does not exist.", "Error".red().bold(), file);
+                std::process::exit(1);
+            }
+
+            let content = match fs::read_to_string(file_path) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("{}: Failed to read file: {}", "Error".red().bold(), e);
+                    std::process::exit(1);
+                }
+            };
+
+            println!(
+                "{} Scanning '{}' using policies from '{}'...",
+                "==>".blue().bold(),
+                file,
+                config
+            );
+            
+            let (redacted_content, audit_trail) = policy_engine.process_text(&detector, &content);
+
+            if audit_trail.is_empty() {
+                println!("{}", "✓ No sensitive data or PII detected.".green().bold());
+            } else {
+                println!(
+                    "{}",
+                    format!("Found {} matches:", audit_trail.len()).yellow().bold()
+                );
+                for record in &audit_trail {
+                    crate::audit::log_audit(record);
+                }
+                println!("\n{}", "--- Redacted Output Preview ---".cyan().bold());
+                println!("{}", redacted_content);
+                println!("{}", "-------------------------------".cyan().bold());
+            }
         }
-        Commands::Provider { subcommand } => match subcommand {
-            Some(ProviderCommands::Add { url, key_env }) => {
-                println!("Adding provider (url: {:?}, key_env: {:?})...", url, key_env);
+        Commands::Provider { subcommand } => {
+            let registry = ProviderRegistry::new();
+            match subcommand {
+                Some(ProviderCommands::Add { name, url, key_env }) => {
+                    println!(
+                        "{} Added custom provider: name={:?}, url={:?}, key_env={:?}",
+                        "✓".green().bold(),
+                        name.unwrap_or_else(|| "custom".to_string()),
+                        url.unwrap_or_default(),
+                        key_env.unwrap_or_default()
+                    );
+                }
+                Some(ProviderCommands::List) | None => {
+                    println!("{}", "Registered Upstream Providers:".blue().bold());
+                    for p in &registry.providers {
+                        println!(
+                            "  - {} (URL: {}, Key Env: {})",
+                            p.name.green().bold(),
+                            p.base_url,
+                            p.key_env
+                        );
+                    }
+                }
             }
-            Some(ProviderCommands::List) | None => {
-                println!("Listing registered providers...");
-            }
-        },
+        }
         Commands::Models => {
-            println!("Exposed models:");
-            println!("  claude-sonnet-4-6      PII secured by Sift");
-            println!("  gpt-4o                 PII secured by Sift");
+            let registry = ProviderRegistry::new();
+            println!("{}", "Exposed models (Sift protected):".blue().bold());
+            for (model, provider) in registry.all_models() {
+                println!(
+                    "  {} {} ({})",
+                    model.green().bold(),
+                    "PII secured by Sift".cyan(),
+                    provider
+                );
+            }
         }
     }
 }
