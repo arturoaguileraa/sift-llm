@@ -51,6 +51,12 @@ enum Commands {
     },
     /// List all models exposed behind Sift gateway
     Models,
+    /// Check status of Sift gateway
+    Status {
+        /// Port of the gateway to check
+        #[arg(short, long, default_value_t = 8787)]
+        port: u16,
+    },
 }
 
 #[derive(Subcommand)]
@@ -63,6 +69,8 @@ enum ProviderCommands {
         url: Option<String>,
         #[arg(long)]
         key_env: Option<String>,
+        #[arg(long)]
+        api_key: Option<String>,
     },
     /// List registered upstream providers
     List,
@@ -74,7 +82,17 @@ async fn main() {
 
     match cli.command {
         Commands::Serve { config, port } => {
-            let policy_engine = PolicyEngine::load_or_default(&config);
+            let policy_path = Path::new(&config);
+            let policy_engine = if policy_path.exists() {
+                PolicyEngine::load_or_default(&config)
+            } else {
+                println!(
+                    "{} Config file '{}' not found. Running with default secure policies.",
+                    "Warning:".yellow().bold(),
+                    config
+                );
+                PolicyEngine::new(policy::PolicyConfig::default())
+            };
             println!(
                 "{} Sift starting in {} mode [config: {}]",
                 "==>".blue().bold(),
@@ -130,8 +148,8 @@ async fn main() {
         }
         Commands::Provider { subcommand } => {
             match subcommand {
-                Some(ProviderCommands::Add { name, url, key_env }) => {
-                    provider_add(name, url, key_env).await;
+                Some(ProviderCommands::Add { name, url, key_env, api_key }) => {
+                    provider_add(name, url, key_env, api_key).await;
                 }
                 Some(ProviderCommands::List) | None => {
                     let registry = ProviderRegistry::new();
@@ -160,21 +178,57 @@ async fn main() {
                 );
             }
         }
+        Commands::Status { port } => {
+            let client = reqwest::Client::new();
+            let url = format!("http://127.0.0.1:{}/health", port);
+            match client.get(&url).send().await {
+                Ok(res) => {
+                    if res.status().is_success() {
+                        if let Ok(json) = res.json::<serde_json::Value>().await {
+                            if json["name"] == "sift-llm" {
+                                let pid = json["pid"].as_u64().unwrap_or(0);
+                                println!(
+                                    "{} Sift gateway is {} (active)",
+                                    "✓".green().bold(),
+                                    "RUNNING".green().bold()
+                                );
+                                println!("  - Address: http://localhost:{}", port);
+                                println!("  - Process ID (PID): {}", pid);
+                                return;
+                            }
+                        }
+                    }
+                    println!(
+                        "{} Something is running on port {}, but it is not Sift gateway.",
+                        "Warning:".yellow().bold(),
+                        port
+                    );
+                }
+                Err(_) => {
+                    println!(
+                        "{} Sift gateway is {} (inactive)",
+                        "✗".red().bold(),
+                        "NOT RUNNING".red().bold()
+                    );
+                    println!("  - To start the gateway, run: {}", "sift serve".cyan());
+                }
+            }
+        }
     }
 }
 
 /// Registers (or updates) an upstream provider and persists it to disk.
 /// Resolves the endpoint from flags, a known preset, or an interactive picker,
 /// then discovers the provider's models from its `/models` endpoint.
-async fn provider_add(name: Option<String>, url: Option<String>, key_env: Option<String>) {
+async fn provider_add(name: Option<String>, url: Option<String>, key_env: Option<String>, api_key: Option<String>) {
     let resolved = if let Some(u) = url {
         // Explicit custom endpoint.
         let n = name.unwrap_or_else(|| derive_name(&u));
-        Some((n, u, key_env.clone().unwrap_or_default()))
+        Some((n, u, key_env.clone().unwrap_or_default(), api_key))
     } else if let Some(n) = name {
         // Known provider by name (e.g. `provider add --name groq`).
         match preset(&n) {
-            Some((base_url, default_key)) => Some((n, base_url, key_env.clone().unwrap_or(default_key))),
+            Some((base_url, default_key)) => Some((n, base_url, key_env.clone().unwrap_or(default_key), api_key)),
             None => {
                 eprintln!(
                     "{}: unknown provider '{}'. Pass --url for a custom endpoint.",
@@ -189,24 +243,26 @@ async fn provider_add(name: Option<String>, url: Option<String>, key_env: Option
         pick_provider_interactive()
     };
 
-    let (name, base_url, key_env) = match resolved {
+    let (name, base_url, key_env, api_key) = match resolved {
         Some(v) => v,
         None => return,
     };
 
     // Discover models from the provider's /models endpoint.
-    let api_key = if key_env.is_empty() {
-        None
-    } else {
-        std::env::var(&key_env).ok()
-    };
+    let discovery_key = api_key.clone().or_else(|| {
+        if key_env.is_empty() {
+            None
+        } else {
+            std::env::var(&key_env).ok()
+        }
+    });
     print!(
         "{} discovering models from {} ... ",
         "==>".blue().bold(),
         base_url
     );
     io::stdout().flush().ok();
-    let models = match discover_models(&base_url, api_key.as_deref()).await {
+    let models = match discover_models(&base_url, discovery_key.as_deref()).await {
         Ok(m) if !m.is_empty() => {
             println!("{}", format!("found {}", m.len()).green());
             m
@@ -226,12 +282,13 @@ async fn provider_add(name: Option<String>, url: Option<String>, key_env: Option
         name: name.clone(),
         base_url,
         key_env,
+        api_key,
         models: models.clone(),
     });
 
     match registry.save() {
         Ok(()) => println!(
-            "{} provider '{}' saved ({} models, key held locally) -> {}",
+            "{} provider '{}' saved ({} models) -> {}",
             "✓".green().bold(),
             name.green().bold(),
             models.len(),
@@ -242,7 +299,7 @@ async fn provider_add(name: Option<String>, url: Option<String>, key_env: Option
 }
 
 /// Simple numbered picker of popular providers plus a custom-URL option.
-fn pick_provider_interactive() -> Option<(String, String, String)> {
+fn pick_provider_interactive() -> Option<(String, String, String, Option<String>)> {
     let presets = ["anthropic", "openai", "google", "groq", "mistral", "ollama"];
     println!("{}", "Add a provider:".blue().bold());
     for (i, p) in presets.iter().enumerate() {
@@ -253,10 +310,10 @@ fn pick_provider_interactive() -> Option<(String, String, String)> {
     let choice = prompt_line("> ");
     let idx: usize = choice.parse().ok()?;
 
-    if idx >= 1 && idx <= presets.len() {
+    let (name, base_url, key_env) = if idx >= 1 && idx <= presets.len() {
         let name = presets[idx - 1].to_string();
         let (base_url, key_env) = preset(&name)?;
-        Some((name, base_url, key_env))
+        (name, base_url, key_env)
     } else if idx == presets.len() + 1 {
         let base_url = prompt_line("Endpoint URL: ");
         if base_url.is_empty() {
@@ -269,10 +326,23 @@ fn pick_provider_interactive() -> Option<(String, String, String)> {
             name_input
         };
         let key_env = prompt_line("API key env var (optional): ");
-        Some((name, base_url, key_env))
+        (name, base_url, key_env)
+    } else {
+        return None;
+    };
+
+    let api_key = if name != "ollama" {
+        let key = prompt_line("API Key (paste here, or press Enter to use environment variable): ");
+        if key.is_empty() {
+            None
+        } else {
+            Some(key)
+        }
     } else {
         None
-    }
+    };
+
+    Some((name, base_url, key_env, api_key))
 }
 
 fn prompt_line(prompt: &str) -> String {
