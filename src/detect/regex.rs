@@ -109,6 +109,9 @@ impl RegexDetector {
         matches
     }
 
+    /// Standalone redaction over all patterns. Exercised by the unit tests;
+    /// the proxy path redacts via the policy engine instead.
+    #[allow(dead_code)]
     pub fn redact(&self, text: &str) -> (String, Vec<DetectionMatch>) {
         let matches = self.scan(text);
         if matches.is_empty() {

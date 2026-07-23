@@ -1,3 +1,3 @@
 pub mod regex;
 
-pub use regex::{DetectionMatch, RegexDetector};
+pub use regex::RegexDetector;
