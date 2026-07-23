@@ -6,12 +6,13 @@ mod proxy;
 
 use clap::{Parser, Subcommand};
 use std::fs;
+use std::io::{self, Write};
 use std::path::Path;
 use colored::Colorize;
 
 use detect::RegexDetector;
 use policy::PolicyEngine;
-use provider::ProviderRegistry;
+use provider::{discover_models, preset, Provider, ProviderRegistry};
 use proxy::run_proxy;
 
 #[derive(Parser)]
@@ -128,25 +129,20 @@ async fn main() {
             }
         }
         Commands::Provider { subcommand } => {
-            let registry = ProviderRegistry::new();
             match subcommand {
                 Some(ProviderCommands::Add { name, url, key_env }) => {
-                    println!(
-                        "{} Added custom provider: name={:?}, url={:?}, key_env={:?}",
-                        "✓".green().bold(),
-                        name.unwrap_or_else(|| "custom".to_string()),
-                        url.unwrap_or_default(),
-                        key_env.unwrap_or_default()
-                    );
+                    provider_add(name, url, key_env).await;
                 }
                 Some(ProviderCommands::List) | None => {
+                    let registry = ProviderRegistry::new();
                     println!("{}", "Registered Upstream Providers:".blue().bold());
                     for p in &registry.providers {
                         println!(
-                            "  - {} (URL: {}, Key Env: {})",
+                            "  - {} (URL: {}, Key Env: {}, {} models)",
                             p.name.green().bold(),
                             p.base_url,
-                            p.key_env
+                            if p.key_env.is_empty() { "-" } else { &p.key_env },
+                            p.models.len()
                         );
                     }
                 }
@@ -164,5 +160,142 @@ async fn main() {
                 );
             }
         }
+    }
+}
+
+/// Registers (or updates) an upstream provider and persists it to disk.
+/// Resolves the endpoint from flags, a known preset, or an interactive picker,
+/// then discovers the provider's models from its `/models` endpoint.
+async fn provider_add(name: Option<String>, url: Option<String>, key_env: Option<String>) {
+    let resolved = if let Some(u) = url {
+        // Explicit custom endpoint.
+        let n = name.unwrap_or_else(|| derive_name(&u));
+        Some((n, u, key_env.clone().unwrap_or_default()))
+    } else if let Some(n) = name {
+        // Known provider by name (e.g. `provider add --name groq`).
+        match preset(&n) {
+            Some((base_url, default_key)) => Some((n, base_url, key_env.clone().unwrap_or(default_key))),
+            None => {
+                eprintln!(
+                    "{}: unknown provider '{}'. Pass --url for a custom endpoint.",
+                    "Error".red().bold(),
+                    n
+                );
+                return;
+            }
+        }
+    } else {
+        // No flags: interactive picker.
+        pick_provider_interactive()
+    };
+
+    let (name, base_url, key_env) = match resolved {
+        Some(v) => v,
+        None => return,
+    };
+
+    // Discover models from the provider's /models endpoint.
+    let api_key = if key_env.is_empty() {
+        None
+    } else {
+        std::env::var(&key_env).ok()
+    };
+    print!(
+        "{} discovering models from {} ... ",
+        "==>".blue().bold(),
+        base_url
+    );
+    io::stdout().flush().ok();
+    let models = match discover_models(&base_url, api_key.as_deref()).await {
+        Ok(m) if !m.is_empty() => {
+            println!("{}", format!("found {}", m.len()).green());
+            m
+        }
+        Ok(_) => {
+            println!("{}", "none returned".yellow());
+            Vec::new()
+        }
+        Err(e) => {
+            println!("{}", format!("skipped ({})", e).yellow());
+            Vec::new()
+        }
+    };
+
+    let mut registry = ProviderRegistry::load();
+    registry.upsert(Provider {
+        name: name.clone(),
+        base_url,
+        key_env,
+        models: models.clone(),
+    });
+
+    match registry.save() {
+        Ok(()) => println!(
+            "{} provider '{}' saved ({} models, key held locally) -> {}",
+            "✓".green().bold(),
+            name.green().bold(),
+            models.len(),
+            ProviderRegistry::config_path().display()
+        ),
+        Err(e) => eprintln!("{}: failed to save providers: {}", "Error".red().bold(), e),
+    }
+}
+
+/// Simple numbered picker of popular providers plus a custom-URL option.
+fn pick_provider_interactive() -> Option<(String, String, String)> {
+    let presets = ["anthropic", "openai", "google", "groq", "mistral", "ollama"];
+    println!("{}", "Add a provider:".blue().bold());
+    for (i, p) in presets.iter().enumerate() {
+        println!("  {}. {}", i + 1, p);
+    }
+    println!("  {}. custom (paste URL)", presets.len() + 1);
+
+    let choice = prompt_line("> ");
+    let idx: usize = choice.parse().ok()?;
+
+    if idx >= 1 && idx <= presets.len() {
+        let name = presets[idx - 1].to_string();
+        let (base_url, key_env) = preset(&name)?;
+        Some((name, base_url, key_env))
+    } else if idx == presets.len() + 1 {
+        let base_url = prompt_line("Endpoint URL: ");
+        if base_url.is_empty() {
+            return None;
+        }
+        let name_input = prompt_line("Name (optional): ");
+        let name = if name_input.is_empty() {
+            derive_name(&base_url)
+        } else {
+            name_input
+        };
+        let key_env = prompt_line("API key env var (optional): ");
+        Some((name, base_url, key_env))
+    } else {
+        None
+    }
+}
+
+fn prompt_line(prompt: &str) -> String {
+    print!("{}", prompt);
+    io::stdout().flush().ok();
+    let mut input = String::new();
+    io::stdin().read_line(&mut input).ok();
+    input.trim().to_string()
+}
+
+/// Derives a short provider name from a URL host (e.g. api.groq.com -> groq).
+fn derive_name(url: &str) -> String {
+    let host = url
+        .split("://")
+        .last()
+        .unwrap_or(url)
+        .split('/')
+        .next()
+        .unwrap_or("custom");
+    let labels: Vec<&str> = host.split(':').next().unwrap_or(host).split('.').collect();
+    if labels.len() >= 2 {
+        labels[labels.len() - 2].to_string()
+    } else {
+        "custom".to_string()
     }
 }
