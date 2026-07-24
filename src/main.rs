@@ -19,6 +19,7 @@ use proxy::run_proxy;
 
 #[derive(Parser)]
 #[command(name = "sift")]
+#[command(version)]
 #[command(about = "A local PII gateway for AI coding agents", long_about = None)]
 struct Cli {
     #[command(subcommand)]

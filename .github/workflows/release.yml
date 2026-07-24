@@ -16,6 +16,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Verify tag matches Cargo.toml version
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          CARGO_VERSION="$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+          if [ "$TAG" != "v${CARGO_VERSION}" ]; then
+            echo "::error::Tag ${TAG} does not match Cargo.toml version ${CARGO_VERSION} (expected tag v${CARGO_VERSION})."
+            exit 1
+          fi
+          echo "Tag ${TAG} matches Cargo.toml version ${CARGO_VERSION}."
+
       - name: Create Draft Release
         uses: softprops/action-gh-release@v2
         with:

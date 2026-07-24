@@ -49,6 +49,15 @@ curl -fsSL https://raw.githubusercontent.com/arturoaguileraa/sift-llm/main/insta
 If the install directory isn't already on your `PATH`, the installer appends a small
 delimited block to your shell rc (so `sift uninstall` can remove it cleanly later).
 
+The installer verifies the download's **SHA-256 checksum** against the `.sha256`
+published alongside each release before installing anything, and aborts on mismatch.
+If the requested version is already installed it exits early; pass `--force` to
+reinstall over it:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/arturoaguileraa/sift-llm/main/install.sh | bash -s -- --force
+```
+
 ### From source
 
 ```bash

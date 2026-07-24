@@ -8,6 +8,14 @@ set -euo pipefail
 REPO="arturoaguileraa/sift-llm"
 BINARY_NAME="sift"
 
+# Parse flags. Supports `curl ... | bash -s -- --force` and SIFT_FORCE=1.
+FORCE="${SIFT_FORCE:-0}"
+for arg in "$@"; do
+  case "$arg" in
+    -f|--force) FORCE=1 ;;
+  esac
+done
+
 # Colors for terminal output
 BOLD="\033[1m"
 GREEN="\033[0;32m"
@@ -103,6 +111,16 @@ else
   fi
 fi
 
+# Skip re-install if the requested version is already present (unless --force).
+if [ "$FORCE" != "1" ] && [ "$VERSION" != "latest" ] && command -v "$BINARY_NAME" >/dev/null 2>&1; then
+  INSTALLED_VERSION="$("$BINARY_NAME" --version 2>/dev/null | awk '{print $NF}' || true)"
+  WANT_VERSION="${VERSION#v}"
+  if [ -n "$INSTALLED_VERSION" ] && [ "$INSTALLED_VERSION" = "$WANT_VERSION" ]; then
+    log_success "Sift ${VERSION} is already installed. Use --force to reinstall."
+    exit 0
+  fi
+fi
+
 log_info "Installing Sift (${VERSION}) for ${TARGET}..."
 
 # Setup temporary directory for download
@@ -122,6 +140,7 @@ fi
 TARBALL="${TMP_DIR}/sift.tar.gz"
 
 log_info "Downloading ${DOWNLOAD_URL}..."
+RESOLVED_URL="$DOWNLOAD_URL"
 if ! curl -fsSL "$DOWNLOAD_URL" -o "$TARBALL"; then
   # Try fallback naming without version tag in filename
   FALLBACK_URL="https://github.com/${REPO}/releases/download/${VERSION}/sift-${TARGET}.tar.gz"
@@ -130,7 +149,45 @@ if ! curl -fsSL "$DOWNLOAD_URL" -o "$TARBALL"; then
     log_error "Please check that release ${VERSION} exists at https://github.com/${REPO}/releases"
     exit 1
   fi
+  RESOLVED_URL="$FALLBACK_URL"
 fi
+
+# Verify the SHA-256 checksum before extracting or installing anything.
+# The release workflow publishes a matching "<tarball>.sha256" for every asset.
+verify_checksum() {
+  local checksum_url="${RESOLVED_URL}.sha256"
+  local checksum_file="${TARBALL}.sha256"
+
+  log_info "Verifying checksum..."
+  if ! curl -fsSL "$checksum_url" -o "$checksum_file"; then
+    log_warning "Checksum file not found at ${checksum_url}; skipping verification."
+    return
+  fi
+
+  local expected actual
+  expected="$(awk '{print $1}' "$checksum_file")"
+
+  if command -v shasum >/dev/null 2>&1; then
+    actual="$(shasum -a 256 "$TARBALL" | awk '{print $1}')"
+  elif command -v sha256sum >/dev/null 2>&1; then
+    actual="$(sha256sum "$TARBALL" | awk '{print $1}')"
+  else
+    log_warning "Neither shasum nor sha256sum available; skipping verification."
+    return
+  fi
+
+  if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
+    log_error "Checksum verification FAILED."
+    log_error "  expected: ${expected:-<empty>}"
+    log_error "  actual:   ${actual}"
+    log_error "The download may be corrupted or tampered with. Aborting."
+    exit 1
+  fi
+
+  log_success "Checksum verified."
+}
+
+verify_checksum
 
 # Extract and install
 tar -xzf "$TARBALL" -C "$TMP_DIR"
