@@ -38,12 +38,13 @@
   <text x="670" y="391" text-anchor="middle" font-size="14" fill="#c7e7db">swap tokens → real PII</text>
 
   <!-- Session vault -->
-  <rect x="370" y="432" width="260" height="82" rx="12" fill="#9c5d0a" stroke="#c67911" stroke-width="1.5"/>
-  <text x="500" y="469" text-anchor="middle" font-size="18" font-weight="700" fill="#f6d9a8">Session vault</text>
-  <text x="500" y="495" text-anchor="middle" font-size="14" fill="#f0c98a">[EMAIL_1] ⇄ alice@…</text>
+  <rect x="358" y="428" width="284" height="96" rx="12" fill="#9c5d0a" stroke="#c67911" stroke-width="1.5"/>
+  <text x="500" y="458" text-anchor="middle" font-size="18" font-weight="700" fill="#f6d9a8">Session vault</text>
+  <text x="500" y="483" text-anchor="middle" font-size="14" fill="#f0c98a">[EMAIL_1] ⇄ alice@acme.com</text>
+  <text x="500" y="505" text-anchor="middle" font-size="14" fill="#f0c98a">[EMAIL_2] ⇄ bob@acme.com</text>
 
-  <text x="470" y="424" text-anchor="end" font-size="14" fill="#e8eaed">write</text>
-  <text x="536" y="424" text-anchor="start" font-size="14" fill="#e8eaed">read</text>
+  <text x="470" y="420" text-anchor="end" font-size="14" fill="#e8eaed">write</text>
+  <text x="536" y="420" text-anchor="start" font-size="14" fill="#e8eaed">read</text>
 
   <!-- opencode -->
   <rect x="250" y="575" width="500" height="85" rx="12" fill="#3a3d3a"/>
@@ -53,10 +54,12 @@
   <!-- Blue outbound path (up) -->
   <line x1="285" y1="575" x2="285" y2="419" stroke="#3b82c4" stroke-width="2.5" marker-end="url(#ah-blue)"/>
   <line x1="285" y1="325" x2="285" y2="149" stroke="#3b82c4" stroke-width="2.5" marker-end="url(#ah-blue)"/>
+  <text x="297" y="556" text-anchor="start" font-size="14" font-weight="600" fill="#3b82c4">query</text>
 
   <!-- Green inbound path (down) -->
   <line x1="715" y1="145" x2="715" y2="321" stroke="#2fa678" stroke-width="2.5" marker-end="url(#ah-green)"/>
   <line x1="715" y1="415" x2="715" y2="571" stroke="#2fa678" stroke-width="2.5" marker-end="url(#ah-green)"/>
+  <text x="703" y="556" text-anchor="end" font-size="14" font-weight="600" fill="#2fa678">response</text>
 
   <!-- Orange vault write / read -->
   <path d="M452,405 C470,420 480,428 496,436" fill="none" stroke="#d98a1f" stroke-width="2.5" marker-end="url(#ah-orange)"/>
