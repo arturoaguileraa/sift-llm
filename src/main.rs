@@ -81,6 +81,11 @@ enum ProviderCommands {
     },
     /// List registered upstream providers
     List,
+    /// Remove a registered upstream provider by name
+    Remove {
+        /// Name of the provider to remove
+        name: String,
+    },
 }
 
 #[tokio::main]
@@ -158,9 +163,26 @@ async fn main() {
                 Some(ProviderCommands::Add { name, url, key_env, api_key }) => {
                     provider_add(name, url, key_env, api_key).await;
                 }
+                Some(ProviderCommands::Remove { name }) => {
+                    let mut registry = ProviderRegistry::load();
+                    if registry.remove(&name) {
+                        match registry.save() {
+                            Ok(()) => {
+                                println!("{} removed provider '{}'", "✓".green().bold(), name.green().bold());
+                                auto_sync_opencode();
+                            }
+                            Err(e) => eprintln!("{}: failed to save providers: {}", "Error".red().bold(), e),
+                        }
+                    } else {
+                        eprintln!("{}: no provider named '{}'", "Warning:".yellow().bold(), name);
+                    }
+                }
                 Some(ProviderCommands::List) | None => {
                     let registry = ProviderRegistry::new();
                     println!("{}", "Registered Upstream Providers:".blue().bold());
+                    if registry.providers.is_empty() {
+                        println!("  (none yet — add one with: {})", "sift provider add".cyan());
+                    }
                     for p in &registry.providers {
                         println!(
                             "  - {} (URL: {}, Key Env: {}, {} models)",

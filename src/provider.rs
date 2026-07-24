@@ -137,6 +137,13 @@ impl ProviderRegistry {
         }
     }
 
+    /// Removes a provider by name. Returns true if one was removed.
+    pub fn remove(&mut self, name: &str) -> bool {
+        let before = self.providers.len();
+        self.providers.retain(|p| p.name != name);
+        before != self.providers.len()
+    }
+
     pub fn all_models(&self) -> Vec<(&str, &str)> {
         let mut list = Vec::new();
         for p in &self.providers {
