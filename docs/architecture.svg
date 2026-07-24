@@ -62,5 +62,5 @@
 
   <!-- Orange vault write / read -->
   <path d="M452,405 C470,420 480,428 496,436" fill="none" stroke="#d98a1f" stroke-width="2.5" marker-end="url(#ah-orange)"/>
-  <path d="M604,436 C588,428 578,420 562,405" fill="none" stroke="#d98a1f" stroke-width="2.5" marker-end="url(#ah-orange)"/>
+  <path d="M560,434 C576,426 588,420 602,408" fill="none" stroke="#d98a1f" stroke-width="2.5" marker-end="url(#ah-orange)"/>
 </svg>
