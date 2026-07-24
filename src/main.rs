@@ -6,7 +6,7 @@ mod proxy;
 mod opencode;
 
 use clap::{Parser, Subcommand};
-use dialoguer::{theme::ColorfulTheme, Input, Select};
+use dialoguer::{theme::ColorfulTheme, Confirm, Input, Select};
 use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
@@ -71,6 +71,15 @@ enum Commands {
     },
     /// Stop a background Sift gateway started with --daemon
     Stop,
+    /// Remove Sift's config, OpenCode provider entry, PATH block and binary
+    Uninstall {
+        /// Skip the confirmation prompt
+        #[arg(long)]
+        yes: bool,
+        /// Keep the binary (only remove config and integrations)
+        #[arg(long)]
+        keep_binary: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -287,33 +296,142 @@ async fn run(cli: Cli) {
                 }
             }
         }
-        Commands::Stop => {
-            let pidfile = sift_dir().join("sift.pid");
-            match std::fs::read_to_string(&pidfile) {
-                Ok(s) => {
-                    let pid = s.trim().to_string();
-                    let stopped = std::process::Command::new("kill")
-                        .arg(&pid)
-                        .status()
-                        .map(|st| st.success())
-                        .unwrap_or(false);
-                    let _ = std::fs::remove_file(&pidfile);
-                    if stopped {
-                        println!("{} stopped Sift (pid {})", "✓".green().bold(), pid);
-                    } else {
-                        println!(
-                            "{} no running process for pid {} (removed stale pid file)",
-                            "Note:".yellow().bold(),
-                            pid
-                        );
-                    }
+        Commands::Stop => stop_daemon(true),
+        Commands::Uninstall { yes, keep_binary } => uninstall(yes, keep_binary),
+    }
+}
+
+/// Stops a background gateway using the pid file. When `verbose`, reports outcome.
+fn stop_daemon(verbose: bool) {
+    let pidfile = sift_dir().join("sift.pid");
+    match std::fs::read_to_string(&pidfile) {
+        Ok(s) => {
+            let pid = s.trim().to_string();
+            let stopped = std::process::Command::new("kill")
+                .arg(&pid)
+                .status()
+                .map(|st| st.success())
+                .unwrap_or(false);
+            let _ = std::fs::remove_file(&pidfile);
+            if verbose {
+                if stopped {
+                    println!("{} stopped Sift (pid {})", "✓".green().bold(), pid);
+                } else {
+                    println!(
+                        "{} no running process for pid {} (removed stale pid file)",
+                        "Note:".yellow().bold(),
+                        pid
+                    );
                 }
-                Err(_) => println!(
+            }
+        }
+        Err(_) => {
+            if verbose {
+                println!(
                     "{} no background Sift found (no pid file at {})",
                     "Note:".yellow().bold(),
                     pidfile.display()
-                ),
+                );
             }
+        }
+    }
+}
+
+/// Removes Sift's footprint: config dir, the OpenCode provider entry, the PATH
+/// block written by install.sh, and (unless `keep_binary`) the binary itself.
+fn uninstall(yes: bool, keep_binary: bool) {
+    let dir = sift_dir();
+    let exe = std::env::current_exe().ok();
+
+    println!("{}", "This will remove:".bold());
+    println!("  - Sift config directory: {}", dir.display());
+    println!("  - The 'sift-llm' provider from your OpenCode config");
+    println!("  - The Sift PATH block from your shell rc (if present)");
+    if !keep_binary {
+        if let Some(ref p) = exe {
+            println!("  - The binary: {}", p.display());
+        }
+    }
+
+    if !yes {
+        let proceed = Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt("Proceed?")
+            .default(false)
+            .interact()
+            .unwrap_or(false);
+        if !proceed {
+            println!("Aborted.");
+            return;
+        }
+    }
+
+    stop_daemon(false);
+
+    match opencode::remove_from_opencode(None) {
+        Ok(true) => println!("{} removed 'sift-llm' from OpenCode config", "✓".green().bold()),
+        Ok(false) => {}
+        Err(e) => eprintln!("{} could not update OpenCode config: {}", "Note:".yellow().bold(), e),
+    }
+
+    if dir.exists() {
+        match std::fs::remove_dir_all(&dir) {
+            Ok(()) => println!("{} removed {}", "✓".green().bold(), dir.display()),
+            Err(e) => eprintln!("{} could not remove {}: {}", "Note:".yellow().bold(), dir.display(), e),
+        }
+    }
+
+    remove_path_block();
+
+    if !keep_binary {
+        if let Some(p) = exe {
+            match std::fs::remove_file(&p) {
+                Ok(()) => println!("{} removed binary {}", "✓".green().bold(), p.display()),
+                Err(e) => {
+                    eprintln!("{} could not remove binary {}: {}", "Note:".yellow().bold(), p.display(), e);
+                    eprintln!("  Remove it manually, e.g.: sudo rm {}", p.display());
+                }
+            }
+        }
+    }
+
+    println!(
+        "{} Sift uninstalled. Restart your shell to drop the PATH change.",
+        "✓".green().bold()
+    );
+}
+
+/// Removes the delimited Sift PATH block (written by install.sh) from shell rc files.
+fn remove_path_block() {
+    const START: &str = "# >>> sift-llm >>>";
+    const END: &str = "# <<< sift-llm <<<";
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    for name in [".zshrc", ".bashrc", ".bash_profile", ".profile"] {
+        let path = std::path::Path::new(&home).join(name);
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        if !content.contains(START) {
+            continue;
+        }
+        let mut out = String::new();
+        let mut skip = false;
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed == START {
+                skip = true;
+                continue;
+            }
+            if trimmed == END {
+                skip = false;
+                continue;
+            }
+            if !skip {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+        if std::fs::write(&path, out).is_ok() {
+            println!("{} removed PATH entry from {}", "✓".green().bold(), path.display());
         }
     }
 }

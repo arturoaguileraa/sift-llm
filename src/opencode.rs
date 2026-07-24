@@ -98,3 +98,27 @@ pub fn sync_opencode(path: Option<&str>) -> Result<(usize, PathBuf), String> {
 
     Ok((count, path))
 }
+
+/// Removes the `sift-llm` provider from opencode's config, leaving the rest of
+/// the file intact. Returns whether the provider was present.
+pub fn remove_from_opencode(path: Option<&str>) -> Result<bool, String> {
+    let path = path.map(PathBuf::from).unwrap_or_else(default_config_path);
+    if !path.exists() {
+        return Ok(false);
+    }
+    let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let mut root: Value = serde_json::from_str(&content)
+        .map_err(|e| format!("could not parse {} as JSON ({})", path.display(), e))?;
+
+    let removed = root
+        .get_mut("provider")
+        .and_then(|p| p.as_object_mut())
+        .map(|prov| prov.remove("sift-llm").is_some())
+        .unwrap_or(false);
+
+    if removed {
+        let out = serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?;
+        fs::write(&path, out).map_err(|e| e.to_string())?;
+    }
+    Ok(removed)
+}
