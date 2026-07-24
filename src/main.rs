@@ -6,6 +6,7 @@ mod proxy;
 mod opencode;
 
 use clap::{Parser, Subcommand};
+use dialoguer::{theme::ColorfulTheme, Input, Select};
 use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
@@ -364,42 +365,59 @@ fn auto_sync_opencode() {
     }
 }
 
-/// Simple numbered picker of popular providers plus a custom-URL option.
+/// Arrow-key picker of popular providers plus a custom-URL option.
 fn pick_provider_interactive() -> Option<(String, String, String, Option<String>)> {
+    // Internal keys stay lowercase (for `preset()`); labels are shown capitalised.
     let presets = ["anthropic", "openai", "google", "groq", "mistral", "ollama"];
-    println!("{}", "Add a provider:".blue().bold());
-    for (i, p) in presets.iter().enumerate() {
-        println!("  {}. {}", i + 1, p);
-    }
-    println!("  {}. custom (paste URL)", presets.len() + 1);
+    let labels = ["Anthropic", "OpenAI", "Google", "Groq", "Mistral", "Ollama"];
+    let mut items: Vec<&str> = labels.to_vec();
+    items.push("Custom (paste URL)");
 
-    let choice = prompt_line("> ");
-    let idx: usize = choice.parse().ok()?;
+    let theme = ColorfulTheme::default();
+    let selection = Select::with_theme(&theme)
+        .with_prompt("Add a provider")
+        .items(&items)
+        .default(0)
+        .interact_opt()
+        .ok()??; // Esc cancels -> None
 
-    let (name, base_url, key_env) = if idx >= 1 && idx <= presets.len() {
-        let name = presets[idx - 1].to_string();
+    let (name, base_url, key_env) = if selection < presets.len() {
+        let name = presets[selection].to_string();
         let (base_url, key_env) = preset(&name)?;
         (name, base_url, key_env)
-    } else if idx == presets.len() + 1 {
-        let base_url = prompt_line("Endpoint URL: ");
-        if base_url.is_empty() {
+    } else {
+        let base_url: String = Input::with_theme(&theme)
+            .with_prompt("Endpoint URL")
+            .interact_text()
+            .ok()?;
+        if base_url.trim().is_empty() {
             return None;
         }
-        let name_input = prompt_line("Name (optional): ");
-        let name = if name_input.is_empty() {
+        let name_input: String = Input::with_theme(&theme)
+            .with_prompt("Name (leave empty to derive from the URL)")
+            .allow_empty(true)
+            .interact_text()
+            .ok()?;
+        let name = if name_input.trim().is_empty() {
             derive_name(&base_url)
         } else {
             name_input
         };
-        let key_env = prompt_line("API key env var (optional): ");
+        let key_env: String = Input::with_theme(&theme)
+            .with_prompt("API key env var (optional)")
+            .allow_empty(true)
+            .interact_text()
+            .ok()?;
         (name, base_url, key_env)
-    } else {
-        return None;
     };
 
     let api_key = if name != "ollama" {
-        let key = prompt_line("API Key (paste here, or press Enter to use environment variable): ");
-        if key.is_empty() {
+        let key: String = Input::with_theme(&theme)
+            .with_prompt("API key (paste, or leave empty to use the env var)")
+            .allow_empty(true)
+            .interact_text()
+            .ok()?;
+        if key.trim().is_empty() {
             None
         } else {
             Some(key)
@@ -409,14 +427,6 @@ fn pick_provider_interactive() -> Option<(String, String, String, Option<String>
     };
 
     Some((name, base_url, key_env, api_key))
-}
-
-fn prompt_line(prompt: &str) -> String {
-    print!("{}", prompt);
-    io::stdout().flush().ok();
-    let mut input = String::new();
-    io::stdin().read_line(&mut input).ok();
-    input.trim().to_string()
 }
 
 /// Derives a short provider name from a URL host (e.g. api.groq.com -> groq).

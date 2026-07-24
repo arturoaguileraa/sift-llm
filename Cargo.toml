@@ -20,3 +20,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 futures-util = "0.3"
 colored = "2.1"
 tower-http = { version = "0.5", features = ["cors", "trace"] }
+dialoguer = "0.11"
