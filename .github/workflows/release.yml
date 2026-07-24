@@ -28,6 +28,7 @@ jobs:
     needs: create-release
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - target: aarch64-apple-darwin
@@ -54,7 +55,9 @@ jobs:
 
       - name: Install cross (if cross-compiling)
         if: ${{ matrix.use_cross }}
-        run: cargo install cross --git https://github.com/cross-rs/cross
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
 
       - name: Build binary
         run: |
