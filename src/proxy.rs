@@ -107,7 +107,12 @@ async fn handle_chat_completions(
     
     // Find provider from registry based on model name
     let provider = state.provider_registry.providers.iter().find(|p| {
-        p.models.contains(&model_name) || model_name.starts_with(&p.name)
+        p.models.contains(&model_name)
+            || model_name.starts_with(&p.name)
+            || (p.name == "google" && (model_name.starts_with("gemini") || model_name.starts_with("google")))
+            || (p.name == "gemini" && (model_name.starts_with("gemini") || model_name.starts_with("google")))
+            || (p.name == "anthropic" && (model_name.starts_with("claude") || model_name.starts_with("anthropic")))
+            || (p.name == "openai" && (model_name.starts_with("gpt") || model_name.starts_with("o1") || model_name.starts_with("o3") || model_name.starts_with("text-")))
     }).or_else(|| {
         // Fallback to first provider (usually Anthropic or OpenAI)
         state.provider_registry.providers.first()
