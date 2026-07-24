@@ -226,14 +226,26 @@ sift models
 | Comando | Qué hace |
 |---|---|
 | `sift serve --config policies.yaml` | Arranca el gateway (el proxy). Daemon persistente en `localhost:8787`. **Es el producto.** |
-| `sift provider add` | Registra un proveedor upstream. Picker interactivo (populares + URL personalizada), o con flags `--url` / `--key-env`. Las claves quedan locales. |
+| `sift provider add` | Registra un proveedor upstream. Picker interactivo (populares + URL personalizada), o con flags `--url` / `--key-env` / `--api-key`. Descubre modelos y re-sincroniza opencode. |
 | `sift provider list` | Lista los proveedores registrados. |
+| `sift provider remove <name>` | Quita un proveedor. Re-sincroniza opencode. |
+| `sift sync-opencode` | Escribe los modelos del registro en la config de opencode (provider `sift-llm`). Se ejecuta solo en add/remove; `--path` cambia la ruta. |
 | `sift models` | Lista los modelos expuestos al agente, cada uno con `(Sift secured)`. |
+| `sift status` | Indica si el gateway está corriendo (y su PID). |
 | `sift scan <file>` | Diagnóstico puntual: muestra qué se detectaría/redactaría. No es el proxy. |
+
+El registro **arranca vacío**: solo los proveedores que añades se exponen, nada se
+siembra por defecto.
 
 Distinción clave: **`serve` es el proxy** (invisible, corre en segundo plano e
 intercepta todo el tráfico); **`scan` es una utilidad de diagnóstico** de un disparo
 para calibrar políticas. No se usa `scan` por cada prompt.
+
+**Integración con opencode:** opencode NO auto-descubre los modelos de un provider
+custom OpenAI-compatible; hay que listarlos en `opencode.jsonc`. Sift lo hace por ti
+con `sift sync-opencode` (y automáticamente al añadir/quitar providers), escribiendo
+solo el bloque `models` del provider `sift-llm` y preservando el resto de tu config.
+Tras un sync hay que reiniciar opencode para que relea.
 
 ```json
 // opencode.json — enganche, sin tocar opencode

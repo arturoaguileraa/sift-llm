@@ -4,8 +4,9 @@
 and any OpenAI/Anthropic-compatible tool) and the model API, and strips sensitive
 data from your prompts before they ever leave your machine.
 
-> Status: early work in progress. Phase 1 (regex redaction + passthrough) is the
-> current milestone. See [Roadmap](#roadmap).
+> Status: work in progress. Regex redaction, a policy engine (shadow/enforce), and
+> multi-provider routing with model discovery work today. Reversible pseudonymization
+> (Phase 3) is next. See [Roadmap](#roadmap).
 
 ![Sift demo](docs/demo.gif)
 
@@ -77,44 +78,54 @@ sift serve --config policies.yaml
 # ✓ Sift listening on http://localhost:8787  [mode: shadow]
 ```
 
-**3. Register your providers.** Run `sift provider add` for an interactive picker
-(popular providers, plus a "Custom URL" option for any OpenAI-compatible endpoint),
-or pass flags directly. Your real keys stay on this machine.
+**3. Register your providers.** The registry starts **empty**: only the providers you
+add are exposed, nothing is seeded. Run `sift provider add` for an interactive picker
+(popular providers, plus a "Custom URL" option for any OpenAI-compatible endpoint), or
+pass flags directly. Your real keys stay on this machine.
 
 ```bash
 sift provider add                       # interactive picker
 sift provider add --url https://api.groq.com/openai/v1   # custom endpoint
+sift provider list                      # see what's registered
+sift provider remove groq               # drop one
 ```
 
-As you add providers, Sift **discovers their models** and exposes them all through
-its single `/v1` endpoint.
+As you add a provider, Sift **discovers its models** from the provider's `/models`
+endpoint and exposes them through its single `/v1` endpoint.
 
-**4. Point your favourite harness (e.g. OpenCode) at Sift.** Add *one* provider in
-`opencode.json` with your gateway endpoint:
+**4. Point OpenCode at Sift.** OpenCode does **not** auto-discover models from a custom
+OpenAI-compatible provider, so Sift writes the model list into OpenCode's config for
+you:
 
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "provider": {
-    "sift": {
-      "npm": "@ai-sdk/openai-compatible",
-      "options": { "baseURL": "http://localhost:8787/v1" }
-    }
-  }
-}
+```bash
+sift sync-opencode
 ```
 
-OpenCode then lists **every model discovered behind the gateway**, each shown as its
-own id plus `PII secured by Sift`:
+This adds (or updates) a `sift-llm` provider in `~/.config/opencode/opencode.jsonc`
+pointing at `http://localhost:8787/v1`, listing every model from your registry. It
+only touches that provider block and leaves the rest of your OpenCode config intact.
 
-```
-claude-sonnet-4-6      PII secured by Sift
-claude-opus-4-8        PII secured by Sift
-llama-3.3-70b          PII secured by Sift
-llama-3.1-8b-instant   PII secured by Sift
-```
+`sift provider add` and `sift provider remove` run this sync **automatically**, so
+your OpenCode model list stays in step with your registry. **Restart OpenCode** after
+a sync to pick up the changes: the models then appear under the **Sift LLM** provider,
+each tagged `(Sift secured)`.
 
-That's it. Use opencode as usual. Sift intercepts every request, redacts what your
+> Prefer to wire it by hand? Add the provider yourself in `opencode.jsonc` and list
+> the models under `"models"` (each id must match `GET /v1/models`):
+>
+> ```json
+> {
+>   "$schema": "https://opencode.ai/config.json",
+>   "provider": {
+>     "sift-llm": {
+>       "npm": "@ai-sdk/openai-compatible",
+>       "options": { "baseURL": "http://localhost:8787/v1" }
+>     }
+>   }
+> }
+> ```
+
+That's it. Use OpenCode as usual. Sift intercepts every request, redacts what your
 policy says, forwards it with your real key, and streams the response back.
 
 ## Configuration
@@ -157,9 +168,12 @@ environment, never in the agent's config.
 | Command | What it does |
 |---|---|
 | `sift serve --config policies.yaml` | Start the gateway (the proxy). Long-running daemon on `localhost:8787`. This is the product. |
-| `sift provider add` | Register an upstream provider. Interactive picker (popular providers + custom URL), or pass `--url` / `--key-env` directly. Keys stay local. |
+| `sift provider add` | Register an upstream provider. Interactive picker (popular providers + custom URL), or pass `--url` / `--key-env` / `--api-key` directly. Keys stay local. Re-syncs OpenCode. |
 | `sift provider list` | Show registered providers. |
+| `sift provider remove <name>` | Remove a registered provider. Re-syncs OpenCode. |
+| `sift sync-opencode` | Write the registry's models into OpenCode's config (`sift-llm` provider). Runs automatically on add/remove; `--path` overrides the config location. |
 | `sift models` | List every model exposed to the agent, each tagged `(Sift secured)`. |
+| `sift status` | Check whether the gateway is running (and its PID). |
 | `sift scan <file>` | One-off diagnostic: show what would be detected/redacted. Not the proxy, just a tool to test your policy. |
 
 The demo gif above shows `serve`, `models`, the live `/v1/models` endpoint, and
@@ -168,12 +182,12 @@ once, point your agent at it, and it protects every request automatically.
 
 ## Roadmap
 
-- [x] Phase 1: regex redaction + streaming passthrough (single provider)
-- [ ] Phase 2: policy engine (`pass` / `redact` / `block`, allowlist, shadow mode)
+- [x] Phase 1: regex redaction + streaming passthrough
+- [x] Phase 2: policy engine (`pass` / `redact` / `block`, allowlist, shadow/enforce)
+- [x] Phase 6: multi-provider registry + routing, model discovery, OpenCode sync
 - [ ] Phase 3: reversible pseudonymization (coherent tokens + response rehydration)
 - [ ] Phase 4: tool-call and tool-result handling
 - [ ] Phase 5: semantic detection (NER via ONNX)
-- [ ] Phase 6: multi-provider routing (one endpoint, many models)
 
 ## Limitations
 
