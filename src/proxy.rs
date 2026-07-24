@@ -66,8 +66,9 @@ async fn handle_models(State(state): State<AppState>) -> impl IntoResponse {
     let data: Vec<Value> = models
         .into_iter()
         .map(|(model, provider)| {
+            let clean_model = model.strip_prefix("models/").unwrap_or(model);
             serde_json::json!({
-                "id": format!("{} (PII secured by Sift)", model),
+                "id": format!("{} (Secured by SiftLLM)", clean_model),
                 "object": "model",
                 "owned_by": provider,
             })
@@ -103,11 +104,19 @@ async fn handle_chat_completions(
     };
 
     // 2. Identify target provider and API key
-    let model_name = payload["model"].as_str().unwrap_or("").to_string();
+    let mut model_name = payload["model"].as_str().unwrap_or("").to_string();
+    
+    // Strip Sift suffix if present
+    if let Some(idx) = model_name.find(" (Secured by SiftLLM)") {
+        model_name = model_name[..idx].to_string();
+    } else if let Some(idx) = model_name.find(" (PII secured by Sift)") {
+        model_name = model_name[..idx].to_string();
+    }
     
     // Find provider from registry based on model name
     let provider = state.provider_registry.providers.iter().find(|p| {
         p.models.contains(&model_name)
+            || p.models.contains(&format!("models/{}", model_name))
             || model_name.starts_with(&p.name)
             || (p.name == "google" && (model_name.starts_with("gemini") || model_name.starts_with("google")))
             || (p.name == "gemini" && (model_name.starts_with("gemini") || model_name.starts_with("google")))
@@ -124,6 +133,15 @@ async fn handle_chat_completions(
             return (StatusCode::INTERNAL_SERVER_ERROR, "No upstream providers configured").into_response();
         }
     };
+
+    // If the provider registry expects the "models/" prefix, restore it
+    let final_model = if provider.models.contains(&format!("models/{}", model_name)) {
+        format!("models/{}", model_name)
+    } else {
+        model_name.clone()
+    };
+    
+    payload["model"] = serde_json::Value::String(final_model);
 
     let api_key = match provider.get_api_key() {
         Some(key) => key,
