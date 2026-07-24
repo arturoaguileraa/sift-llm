@@ -79,7 +79,7 @@ sift serve --config policies.yaml
 ```
 
 **3. Register your providers.** The registry starts **empty**: only the providers you
-add are exposed, nothing is seeded. Run `sift provider add` for an interactive picker
+add are exposed, nothing is seeded. Run `sift provider add` for an arrow-key picker
 (popular providers, plus a "Custom URL" option for any OpenAI-compatible endpoint), or
 pass flags directly. Your real keys stay on this machine.
 
@@ -168,7 +168,7 @@ environment, never in the agent's config.
 | Command | What it does |
 |---|---|
 | `sift serve --config policies.yaml` | Start the gateway (the proxy). Long-running daemon on `localhost:8787`. This is the product. |
-| `sift provider add` | Register an upstream provider. Interactive picker (popular providers + custom URL), or pass `--url` / `--key-env` / `--api-key` directly. Keys stay local. Re-syncs OpenCode. |
+| `sift provider add` | Register an upstream provider. Arrow-key picker (popular providers + custom URL), or pass `--url` / `--key-env` / `--api-key` directly. Keys stay local. Re-syncs OpenCode. |
 | `sift provider list` | Show registered providers. |
 | `sift provider remove <name>` | Remove a registered provider. Re-syncs OpenCode. |
 | `sift sync-opencode` | Write the registry's models into OpenCode's config (`sift-llm` provider). Runs automatically on add/remove; `--path` overrides the config location. |

@@ -213,7 +213,7 @@ cargo build --release
 export ANTHROPIC_API_KEY=sk-ant-...
 sift serve --config policies.yaml
 
-# registrar proveedores: picker interactivo (populares + URL personalizada)
+# registrar proveedores: picker con flechas (populares + URL personalizada)
 sift provider add                       # menú interactivo
 sift provider add --url https://api.groq.com/openai/v1   # endpoint OpenAI-compatible
 
@@ -226,7 +226,7 @@ sift models
 | Comando | Qué hace |
 |---|---|
 | `sift serve --config policies.yaml` | Arranca el gateway (el proxy). Daemon persistente en `localhost:8787`. **Es el producto.** |
-| `sift provider add` | Registra un proveedor upstream. Picker interactivo (populares + URL personalizada), o con flags `--url` / `--key-env` / `--api-key`. Descubre modelos y re-sincroniza opencode. |
+| `sift provider add` | Registra un proveedor upstream. Picker con flechas (populares + URL personalizada), o con flags `--url` / `--key-env` / `--api-key`. Descubre modelos y re-sincroniza opencode. |
 | `sift provider list` | Lista los proveedores registrados. |
 | `sift provider remove <name>` | Quita un proveedor. Re-sincroniza opencode. |
 | `sift sync-opencode` | Escribe los modelos del registro en la config de opencode (provider `sift-llm`). Se ejecuta solo en add/remove; `--path` cambia la ruta. |
