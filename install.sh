@@ -146,14 +146,37 @@ chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
 
 log_success "Sift installed successfully to ${INSTALL_DIR}/${BINARY_NAME}"
 
-# Verify installation in PATH
+# Ensure INSTALL_DIR is on PATH, managed as a delimited block so `sift uninstall`
+# can remove it cleanly later.
+SIFT_PATH_START="# >>> sift-llm >>>"
+SIFT_PATH_END="# <<< sift-llm <<<"
+
+add_to_path() {
+  local rc
+  case "$(basename "${SHELL:-}")" in
+    zsh)  rc="$HOME/.zshrc" ;;
+    bash) if [ "$OS" = "Darwin" ]; then rc="$HOME/.bash_profile"; else rc="$HOME/.bashrc"; fi ;;
+    *)    rc="$HOME/.profile" ;;
+  esac
+
+  if [ -f "$rc" ] && grep -qF "$SIFT_PATH_START" "$rc"; then
+    log_info "PATH entry already present in ${rc}."
+    return
+  fi
+
+  {
+    printf '\n%s\n' "$SIFT_PATH_START"
+    printf 'export PATH="%s:$PATH"\n' "$INSTALL_DIR"
+    printf '%s\n' "$SIFT_PATH_END"
+  } >> "$rc"
+
+  log_success "Added ${INSTALL_DIR} to PATH in ${rc}."
+  log_warning "Restart your shell or run: source ${rc}"
+}
+
 case ":$PATH:" in
-  *:"$INSTALL_DIR":*) ;;
-  *)
-    log_warning "${INSTALL_DIR} is not currently in your PATH environment variable."
-    log_warning "Add it to your shell configuration (e.g. ~/.zshrc or ~/.bashrc):"
-    printf "\n    ${BOLD}export PATH=\"%s:\$PATH\"${RESET}\n\n" "$INSTALL_DIR"
-    ;;
+  *:"$INSTALL_DIR":*) ;;  # already on PATH, nothing to do
+  *) add_to_path ;;
 esac
 
 log_info "Run '${BINARY_NAME} --help' or '${BINARY_NAME} serve' to get started!"
