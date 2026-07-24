@@ -1,8 +1,9 @@
 # Sift demo — console segment (provider registration) for docs/demo.gif.
 # The final docs/demo.gif is this clip followed by a screen recording of
 # OpenCode using Sift, concatenated with ffmpeg. Render this part with:
+#   export GEMINI_API_KEY=...        # read from the env, never shown on screen
 #   cargo build --release && vhs docs/demo-console.tape
-# A throwaway HOME is used so the placeholder key never touches your real
+# A throwaway HOME is used so the demo never touches your real
 # ~/.config/sift/providers.json.
 
 Output "docs/demo-console.gif"
@@ -27,5 +28,5 @@ Show
 
 Type "# Register your LLM provider with Sift. Your API key stays on this machine." Enter
 Sleep 700ms
-Type "sift provider add --name google --api-key AIzaSyD3M0pl4c3h0ld3rKEYxxxxxxxxxxxx" Enter
-Sleep 3200ms
+Type "sift provider add --name google" Enter
+Sleep 3600ms
