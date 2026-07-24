@@ -3,6 +3,7 @@ mod policy;
 mod provider;
 mod audit;
 mod proxy;
+mod opencode;
 
 use clap::{Parser, Subcommand};
 use std::fs;
@@ -56,6 +57,12 @@ enum Commands {
         /// Port of the gateway to check
         #[arg(short, long, default_value_t = 8787)]
         port: u16,
+    },
+    /// Write the registry's models into opencode's config (provider "sift-llm")
+    SyncOpencode {
+        /// Path to opencode config (defaults to ~/.config/opencode/opencode.jsonc)
+        #[arg(long)]
+        path: Option<String>,
     },
 }
 
@@ -214,6 +221,23 @@ async fn main() {
                 }
             }
         }
+        Commands::SyncOpencode { path } => {
+            match opencode::sync_opencode(path.as_deref()) {
+                Ok((n, p)) => {
+                    println!(
+                        "{} wrote {} models to {}",
+                        "✓".green().bold(),
+                        n,
+                        p.display()
+                    );
+                    println!("  Restart opencode to see them under the 'Sift LLM' provider.");
+                }
+                Err(e) => {
+                    eprintln!("{}: {}", "Error".red().bold(), e);
+                    std::process::exit(1);
+                }
+            }
+        }
     }
 }
 
@@ -287,14 +311,34 @@ async fn provider_add(name: Option<String>, url: Option<String>, key_env: Option
     });
 
     match registry.save() {
-        Ok(()) => println!(
-            "{} provider '{}' saved ({} models) -> {}",
-            "✓".green().bold(),
-            name.green().bold(),
-            models.len(),
-            ProviderRegistry::config_path().display()
-        ),
+        Ok(()) => {
+            println!(
+                "{} provider '{}' saved ({} models) -> {}",
+                "✓".green().bold(),
+                name.green().bold(),
+                models.len(),
+                ProviderRegistry::config_path().display()
+            );
+            auto_sync_opencode();
+        }
         Err(e) => eprintln!("{}: failed to save providers: {}", "Error".red().bold(), e),
+    }
+}
+
+/// Best-effort sync of opencode's config after the registry changes. Silently
+/// skips if opencode is not set up; only warns on real failures.
+fn auto_sync_opencode() {
+    if !opencode::is_configured() {
+        return;
+    }
+    match opencode::sync_opencode(None) {
+        Ok((n, p)) => println!(
+            "{} opencode synced: {} models -> {} (restart opencode to see them)",
+            "✓".green().bold(),
+            n,
+            p.display()
+        ),
+        Err(e) => eprintln!("{} opencode not synced: {}", "Note:".yellow().bold(), e),
     }
 }
 
