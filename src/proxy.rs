@@ -11,6 +11,7 @@ use std::net::SocketAddr;
 use futures_util::stream::StreamExt;
 use reqwest::Client;
 use serde_json::Value;
+use colored::Colorize;
 
 use crate::detect::RegexDetector;
 use crate::policy::{PolicyEngine, AuditRecord, Action};
@@ -40,7 +41,23 @@ pub async fn run_proxy(port: u16, policy_engine: PolicyEngine) -> Result<(), Box
         .with_state(state);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let listener = match tokio::net::TcpListener::bind(addr).await {
+        Ok(l) => l,
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+            eprintln!(
+                "{} Port {} is already in use (another Sift gateway may be running).",
+                "Error:".red().bold(),
+                port
+            );
+            eprintln!(
+                "  Use {} to run on a different port, e.g. {}.",
+                "--port <PORT>".cyan(),
+                format!("sift serve --port {}", port + 1).cyan()
+            );
+            std::process::exit(1);
+        }
+        Err(e) => return Err(Box::new(e)),
+    };
     println!("✓ Sift listening on http://localhost:{}", port);
     axum::serve(listener, app).await?;
 
