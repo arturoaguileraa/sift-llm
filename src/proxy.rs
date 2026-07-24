@@ -44,16 +44,7 @@ pub async fn run_proxy(port: u16, policy_engine: PolicyEngine) -> Result<(), Box
     let listener = match tokio::net::TcpListener::bind(addr).await {
         Ok(l) => l,
         Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
-            eprintln!(
-                "{} Port {} is already in use (another Sift gateway may be running).",
-                "Error:".red().bold(),
-                port
-            );
-            eprintln!(
-                "  Use {} to run on a different port, e.g. {}.",
-                "--port <PORT>".cyan(),
-                format!("sift serve --port {}", port + 1).cyan()
-            );
+            report_port_in_use(port);
             std::process::exit(1);
         }
         Err(e) => return Err(Box::new(e)),
@@ -62,6 +53,20 @@ pub async fn run_proxy(port: u16, policy_engine: PolicyEngine) -> Result<(), Box
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+/// Prints the "port already in use" error with a hint to use `--port`.
+pub fn report_port_in_use(port: u16) {
+    eprintln!(
+        "{} Port {} is already in use (another Sift gateway may be running).",
+        "Error:".red().bold(),
+        port
+    );
+    eprintln!(
+        "  Use {} to run on a different port, e.g. {}.",
+        "--port <PORT>".cyan(),
+        format!("sift serve --port {}", port + 1).cyan()
+    );
 }
 
 async fn handle_health() -> impl IntoResponse {

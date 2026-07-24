@@ -36,6 +36,10 @@ enum Commands {
         /// Listening port for local gateway
         #[arg(short, long, default_value_t = 8787)]
         port: u16,
+
+        /// Run in the background (detached daemon)
+        #[arg(short = 'd', long)]
+        daemon: bool,
     },
     /// Scan a single file for sensitive data and PII
     Scan {
@@ -65,6 +69,8 @@ enum Commands {
         #[arg(long)]
         path: Option<String>,
     },
+    /// Stop a background Sift gateway started with --daemon
+    Stop,
 }
 
 #[derive(Subcommand)]
@@ -89,12 +95,23 @@ enum ProviderCommands {
     },
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     let cli = Cli::parse();
 
+    // Daemonize before the async runtime starts: the fork must happen while the
+    // process is still single-threaded (tokio threads don't survive a fork).
+    if let Commands::Serve { daemon: true, port, .. } = &cli.command {
+        ensure_port_free(*port);
+        daemonize_background();
+    }
+
+    let rt = tokio::runtime::Runtime::new().expect("failed to build the tokio runtime");
+    rt.block_on(run(cli));
+}
+
+async fn run(cli: Cli) {
     match cli.command {
-        Commands::Serve { config, port } => {
+        Commands::Serve { config, port, daemon } => {
             let policy_path = Path::new(&config);
             let policy_engine = if policy_path.exists() {
                 PolicyEngine::load_or_default(&config)
@@ -112,6 +129,15 @@ async fn main() {
                 format!("{:?}", policy_engine.config.mode).green().bold(),
                 config
             );
+            if !daemon {
+                println!(
+                    "{} add {} to run it in the background (then {} / {}).",
+                    "Tip:".yellow().bold(),
+                    "-d".cyan(),
+                    "sift stop".cyan(),
+                    "sift status".cyan()
+                );
+            }
             if let Err(e) = run_proxy(port, policy_engine).await {
                 eprintln!("{}: {}", "Error starting proxy".red().bold(), e);
                 std::process::exit(1);
@@ -259,6 +285,34 @@ async fn main() {
                     eprintln!("{}: {}", "Error".red().bold(), e);
                     std::process::exit(1);
                 }
+            }
+        }
+        Commands::Stop => {
+            let pidfile = sift_dir().join("sift.pid");
+            match std::fs::read_to_string(&pidfile) {
+                Ok(s) => {
+                    let pid = s.trim().to_string();
+                    let stopped = std::process::Command::new("kill")
+                        .arg(&pid)
+                        .status()
+                        .map(|st| st.success())
+                        .unwrap_or(false);
+                    let _ = std::fs::remove_file(&pidfile);
+                    if stopped {
+                        println!("{} stopped Sift (pid {})", "✓".green().bold(), pid);
+                    } else {
+                        println!(
+                            "{} no running process for pid {} (removed stale pid file)",
+                            "Note:".yellow().bold(),
+                            pid
+                        );
+                    }
+                }
+                Err(_) => println!(
+                    "{} no background Sift found (no pid file at {})",
+                    "Note:".yellow().bold(),
+                    pidfile.display()
+                ),
             }
         }
     }
@@ -443,5 +497,62 @@ fn derive_name(url: &str) -> String {
         labels[labels.len() - 2].to_string()
     } else {
         "custom".to_string()
+    }
+}
+
+/// Directory where Sift keeps its runtime files (~/.config/sift).
+fn sift_dir() -> std::path::PathBuf {
+    ProviderRegistry::config_path()
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+}
+
+/// Exits with a clear message if `port` is already taken (checked before forking).
+fn ensure_port_free(port: u16) {
+    match std::net::TcpListener::bind(("127.0.0.1", port)) {
+        Ok(listener) => drop(listener),
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+            proxy::report_port_in_use(port);
+            std::process::exit(1);
+        }
+        Err(_) => {} // other errors surface later when the proxy binds
+    }
+}
+
+/// Detaches the process into the background, writing a pid file and a log file
+/// under ~/.config/sift. Only the detached child returns from here.
+fn daemonize_background() {
+    let dir = sift_dir();
+    std::fs::create_dir_all(&dir).ok();
+    let log_path = dir.join("sift.log");
+    let out = match std::fs::File::create(&log_path) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!(
+                "{}: cannot create log file {}: {}",
+                "Error".red().bold(),
+                log_path.display(),
+                e
+            );
+            std::process::exit(1);
+        }
+    };
+    let err = out.try_clone().expect("clone log handle");
+    println!(
+        "{} Sift is running in the background.\n  Logs:   {}\n  Stop:   {}\n  Status: {}",
+        "✓".green().bold(),
+        log_path.display(),
+        "sift stop".cyan(),
+        "sift status".cyan()
+    );
+    let daemon = daemonize::Daemonize::new()
+        .pid_file(dir.join("sift.pid"))
+        .working_directory(std::env::current_dir().unwrap_or_else(|_| ".".into()))
+        .stdout(out)
+        .stderr(err);
+    if let Err(e) = daemon.start() {
+        eprintln!("{}: failed to start daemon: {}", "Error".red().bold(), e);
+        std::process::exit(1);
     }
 }
