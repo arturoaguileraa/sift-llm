@@ -31,6 +31,22 @@ while keeping the response useful.
 - **Model-agnostic.** Point it at Anthropic, OpenAI, or a local model.
 - **Local by default.** Your data and your real API keys stay on your machine.
 
+## How it works
+
+Sift is a local reverse proxy with two directions. **Outbound**, it detects sensitive
+data, applies your policy, and swaps each value for a stable token before the request
+leaves your machine. **Inbound**, it rehydrates those tokens back to the real values in
+the streamed response, so your agent sees usable output while the provider never sees
+your PII. A per-session **vault** holds the `token ⇄ value` mapping, encrypted in memory.
+
+![Sift-LLM architecture](docs/architecture.svg)
+
+> This diagram is the target flow. Today Sift does one-way redaction (Phases 1 and 2);
+> the reversible vault and streamed rehydration land in Phase 3. See [Roadmap](#roadmap).
+
+For the longer story on why "cloud vs local" is a false trade-off, how detection works,
+and where a small local model fits, read [**Why Sift-LLM**](docs/why-sift-llm.md).
+
 ## Requirements
 
 - [Rust](https://www.rust-lang.org/tools/install) 1.75+ (`rustup` recommended)

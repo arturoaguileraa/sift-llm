@@ -1,0 +1,66 @@
+<svg viewBox="0 0 1000 700" xmlns="http://www.w3.org/2000/svg" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="ah-blue" markerWidth="9" markerHeight="9" refX="4.5" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#3b82c4"/>
+    </marker>
+    <marker id="ah-green" markerWidth="9" markerHeight="9" refX="4.5" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#2fa678"/>
+    </marker>
+    <marker id="ah-orange" markerWidth="9" markerHeight="9" refX="4.5" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#d98a1f"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1000" height="700" fill="#ffffff"/>
+
+  <!-- LLM API -->
+  <rect x="250" y="50" width="500" height="95" rx="14" fill="#454099"/>
+  <text x="500" y="92" text-anchor="middle" font-size="24" font-weight="700" fill="#ffffff">LLM API</text>
+  <text x="500" y="120" text-anchor="middle" font-size="16" fill="#c9c6ea">OpenAI / Anthropic</text>
+
+  <!-- cloud / local divider -->
+  <line x1="40" y1="188" x2="960" y2="188" stroke="#c3c7cc" stroke-width="1.5" stroke-dasharray="7 6"/>
+  <text x="55" y="176" font-size="15" fill="#9aa0a6">cloud</text>
+  <text x="55" y="210" font-size="15" fill="#9aa0a6">local machine</text>
+  <text x="55" y="243" font-size="15" fill="#9aa0a6">tokens · no PII</text>
+  <text x="560" y="243" font-size="15" fill="#9aa0a6">response with tokens</text>
+
+  <!-- Gateway container -->
+  <rect x="170" y="270" width="660" height="270" rx="16" fill="#3a3d3a"/>
+  <text x="500" y="303" text-anchor="middle" font-size="19" font-weight="600" fill="#e8eaed">Sift-LLM gateway (local)</text>
+
+  <!-- Outbound -->
+  <rect x="205" y="325" width="250" height="90" rx="12" fill="#1e6cb0"/>
+  <text x="330" y="365" text-anchor="middle" font-size="19" font-weight="700" fill="#ffffff">Outbound · tokenize</text>
+  <text x="330" y="391" text-anchor="middle" font-size="14" fill="#d3e4f4">detect → policy → tokenize</text>
+
+  <!-- Inbound -->
+  <rect x="545" y="325" width="250" height="90" rx="12" fill="#14795a"/>
+  <text x="670" y="365" text-anchor="middle" font-size="19" font-weight="700" fill="#ffffff">Inbound · rehydrate</text>
+  <text x="670" y="391" text-anchor="middle" font-size="14" fill="#c7e7db">swap tokens → real PII</text>
+
+  <!-- Session vault -->
+  <rect x="370" y="432" width="260" height="82" rx="12" fill="#9c5d0a" stroke="#c67911" stroke-width="1.5"/>
+  <text x="500" y="469" text-anchor="middle" font-size="18" font-weight="700" fill="#f6d9a8">Session vault</text>
+  <text x="500" y="495" text-anchor="middle" font-size="14" fill="#f0c98a">[EMAIL_1] ⇄ alice@…</text>
+
+  <text x="470" y="424" text-anchor="end" font-size="14" fill="#e8eaed">write</text>
+  <text x="536" y="424" text-anchor="start" font-size="14" fill="#e8eaed">read</text>
+
+  <!-- opencode -->
+  <rect x="250" y="575" width="500" height="85" rx="12" fill="#3a3d3a"/>
+  <text x="500" y="612" text-anchor="middle" font-size="21" font-weight="700" fill="#ffffff">opencode</text>
+  <text x="500" y="637" text-anchor="middle" font-size="14" fill="#9aa0a6">harness / IDE</text>
+
+  <!-- Blue outbound path (up) -->
+  <line x1="285" y1="575" x2="285" y2="419" stroke="#3b82c4" stroke-width="2.5" marker-end="url(#ah-blue)"/>
+  <line x1="285" y1="325" x2="285" y2="149" stroke="#3b82c4" stroke-width="2.5" marker-end="url(#ah-blue)"/>
+
+  <!-- Green inbound path (down) -->
+  <line x1="715" y1="145" x2="715" y2="321" stroke="#2fa678" stroke-width="2.5" marker-end="url(#ah-green)"/>
+  <line x1="715" y1="415" x2="715" y2="571" stroke="#2fa678" stroke-width="2.5" marker-end="url(#ah-green)"/>
+
+  <!-- Orange vault write / read -->
+  <path d="M452,405 C470,420 480,428 496,436" fill="none" stroke="#d98a1f" stroke-width="2.5" marker-end="url(#ah-orange)"/>
+  <path d="M604,436 C588,428 578,420 562,405" fill="none" stroke="#d98a1f" stroke-width="2.5" marker-end="url(#ah-orange)"/>
+</svg>
