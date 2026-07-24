@@ -234,6 +234,7 @@ sift models
 | `sift models` | Lista los modelos expuestos al agente, cada uno con `(Sift secured)`. |
 | `sift status` | Indica si el gateway está corriendo (y su PID). |
 | `sift scan <file>` | Diagnóstico puntual: muestra qué se detectaría/redactaría. No es el proxy. |
+| `sift uninstall` | Elimina config, el provider `sift-llm` de opencode, el bloque de PATH y el binario. `--yes` sin prompt; `--keep-binary` conserva el binario. |
 
 El registro **arranca vacío**: solo los proveedores que añades se exponen, nada se
 siembra por defecto.

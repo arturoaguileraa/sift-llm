@@ -46,6 +46,9 @@ Install the pre-compiled binary for macOS or Linux with a single command:
 curl -fsSL https://raw.githubusercontent.com/arturoaguileraa/sift-llm/main/install.sh | bash
 ```
 
+If the install directory isn't already on your `PATH`, the installer appends a small
+delimited block to your shell rc (so `sift uninstall` can remove it cleanly later).
+
 ### From source
 
 ```bash
@@ -180,6 +183,7 @@ environment, never in the agent's config.
 | `sift models` | List every model exposed to the agent, each tagged `(Sift secured)`. |
 | `sift status` | Check whether the gateway is running (and its PID). |
 | `sift scan <file>` | One-off diagnostic: show what would be detected/redacted. Not the proxy, just a tool to test your policy. |
+| `sift uninstall` | Remove Sift's config, the OpenCode provider entry, the PATH block and the binary. `--yes` skips the prompt; `--keep-binary` keeps the binary. |
 
 The demo gif above shows `serve`, `models`, the live `/v1/models` endpoint, and
 `scan` redacting a file. In normal use the proxy is invisible: you start `sift serve`
@@ -201,6 +205,18 @@ once, point your agent at it, and it protects every request automatically.
   request bypasses Sift. Sift only sees traffic to the model.
 - Regex detection (current phase) catches structured secrets well but misses
   contextual PII. Semantic detection lands in Phase 5.
+
+## Uninstall
+
+```bash
+sift uninstall          # asks for confirmation first
+sift uninstall --yes    # no prompt
+```
+
+This stops any running daemon and removes everything Sift created: its config
+directory (`~/.config/sift`), the `sift-llm` provider it wrote into your OpenCode
+config, the PATH block the installer added to your shell rc, and the binary itself.
+Use `--keep-binary` to remove only the config and integrations.
 
 ## License
 
