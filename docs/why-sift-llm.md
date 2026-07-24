@@ -1,162 +1,161 @@
-# Sift-LLM: usar los mejores modelos de la nube sin regalarles tus datos
+# Sift-LLM: use the best cloud models without handing them your data
 
-> Cómo un pequeño proxy local te deja tener a la vez la calidad de un modelo grande
-> y la privacidad de uno que corre en tu máquina.
+> How a small local proxy lets you have both the quality of a large model and the
+> privacy of one running on your own machine.
 
-## El dilema que aparece en cuanto enchufas un agente de IA a tu código
+## The dilemma that shows up the moment you plug an AI agent into your code
 
-Los agentes de programación (opencode, y en general cualquier herramienta que hable
-con OpenAI o Anthropic) son enormemente útiles. Pero tienen un efecto secundario del
-que casi nadie habla: para ayudarte, leen tu código, tus logs y tu configuración, y
-todo eso viaja a un servidor de un tercero.
+Coding agents (opencode, and in general any tool that talks to OpenAI or Anthropic)
+are enormously useful. But they come with a side effect almost nobody talks about:
+to help you, they read your code, your logs, and your configuration, and all of that
+travels to a third party's server.
 
-Y ahí no va solo "código". Van claves de API, cadenas de conexión a bases de datos,
-correos de clientes, nombres reales, tokens. No salta ninguna alerta de transferencia
-de ficheros. Ninguna regla de DLP se dispara. Simplemente lo pegas en el prompt, o el
-agente abre un fichero, y esos datos ya están fuera de tu máquina.
+And it is not just "code" that goes. API keys, database connection strings, customer
+emails, real names, tokens. No file-transfer alert fires. No DLP rule triggers. You
+just paste it into the prompt, or the agent opens a file, and that data is already
+off your machine.
 
-## Nube contra local: un falso dilema
+## Cloud vs local: a false dilemma
 
-La respuesta habitual a este problema se plantea como una elección entre dos males:
+The usual answer to this problem is framed as a choice between two evils:
 
-- **Modelo en la nube.** Calidad y velocidad de primera. A cambio, mandas datos
-  sensibles a una empresa externa y confías en su política de retención.
-- **Modelo local.** Tus datos no salen de casa. A cambio, calidad y velocidad
-  peores, y hardware caro para acercarte siquiera a un modelo grande.
+- **Cloud model.** Top-tier quality and speed. In exchange, you send sensitive data
+  to an external company and trust their retention policy.
+- **Local model.** Your data never leaves home. In exchange, worse quality and
+  speed, and expensive hardware just to get close to a large model.
 
-Se presenta como si tuvieras que sacrificar una cosa para tener la otra: o buen
-modelo o privacidad. Sift-LLM parte de la idea de que ese dilema es falso. **Lo que
-sale de tu máquina no tiene por qué ser lo mismo que procesa el modelo.**
+It is presented as if you had to sacrifice one thing to get the other: either a good
+model or privacy. Sift-LLM starts from the idea that this dilemma is false. **What
+leaves your machine does not have to be the same thing the model processes.**
 
-Si antes de que la petición salga sustituyes los datos sensibles por marcadores, y
-al volver la respuesta deshaces esa sustitución, consigues las dos cosas a la vez: el
-modelo grande de la nube trabaja con la estructura de tu problema, pero nunca ve el
-dato real. La calidad es la del modelo de la nube. La privacidad es la de uno local.
+If you swap sensitive data for placeholders before the request leaves, and undo that
+swap when the response comes back, you get both at once: the large cloud model works
+on the structure of your problem, but never sees the real data. The quality is that
+of the cloud model. The privacy is that of a local one.
 
-## La idea: un proxy local que anonimiza y rehidrata
+## The idea: a local proxy that anonymizes and rehydrates
 
-Sift es un proxy inverso que corre en tu propia máquina. El agente cree que habla
-directamente con la API del modelo, pero en medio hay dos pasos:
+Sift is a reverse proxy that runs on your own machine. The agent thinks it is talking
+directly to the model API, but two steps sit in between:
 
-![Arquitectura de Sift-LLM](architecture.svg)
+![Sift-LLM architecture](architecture.svg)
 
-- **Salida (outbound).** Detecta los datos sensibles, aplica tu política y sustituye
-  cada valor por un token estable antes de que la petición cruce a la nube. Lo que
-  viaja son tokens, sin PII.
-- **Entrada (inbound).** Cuando la respuesta vuelve con esos tokens dentro, los
-  cambia de nuevo por los valores reales antes de entregársela al agente.
-- **Vault de sesión.** Una pequeña bóveda en memoria guarda la correspondencia
-  `token ⇄ valor` para que la vuelta sea posible. Cifrada, viva solo durante la
-  sesión, nunca escrita a disco.
+- **Outbound.** It detects sensitive data, applies your policy, and swaps each value
+  for a stable token before the request crosses into the cloud. What travels is
+  tokens, no PII.
+- **Inbound.** When the response comes back with those tokens inside, it swaps them
+  back to the real values before handing it to the agent.
+- **Session vault.** A small in-memory vault holds the `token ⇄ value` mapping so the
+  round trip is possible. Encrypted, alive only for the duration of the session,
+  never written to disk.
 
-El agente ve datos reales y útiles. El proveedor del modelo solo ve tokens. Ni el
-agente ni el proveedor se enteran de que hay algo en medio.
+The agent sees real, usable data. The model provider only ever sees tokens. Neither
+the agent nor the provider knows there is anything in the middle.
 
-## Paso 1: detectar lo sensible
+## Step 1: detect what is sensitive
 
-Nada de esto sirve si no se detecta bien qué es sensible. El primer nivel de
-detección son expresiones regulares y validadores: patrones para claves de API,
-cadenas de conexión, correos, IPs, rutas de fichero, tarjetas. Es rápido,
-determinista y cubre la mayoría de secretos que aparecen en un flujo de código.
+None of this works if you do not detect what is sensitive in the first place. The
+first layer of detection is regular expressions and validators: patterns for API
+keys, connection strings, emails, IPs, file paths, credit cards. It is fast,
+deterministic, and covers most of the secrets that show up in a coding flow.
 
-Un detalle importante: en un agente de programación la PII no entra sobre todo por
-lo que tú escribes, sino por lo que **el agente lee**. Cuando abre un `.env`, un
-fichero de config o un dump, ahí es donde aparecen los secretos de verdad. Por eso
-el detector trata esos contenidos leídos como fuente principal, no como un extra.
+One detail that matters: in a coding agent, PII mostly does not come in through what
+you type, but through what **the agent reads**. When it opens a `.env`, a config
+file, or a dump, that is where the real secrets appear. That is why the detector
+treats those read contents as the primary source, not as an afterthought.
 
-## Paso 2: decidir qué hacer con cada dato (políticas)
+## Step 2: decide what to do with each value (policies)
 
-Detectar no es suficiente: no todo se trata igual. Sift usa un motor de políticas
-configurable por categoría, con tres acciones:
+Detection alone is not enough: not everything should be treated the same way. Sift
+uses a policy engine configurable per category, with three actions:
 
-- **`pass`.** Se deja pasar. Un dato funcional, como una IP de loopback, que el
-  modelo necesita para ayudarte de verdad.
-- **`pseudonymize`.** Se sustituye por un token reversible. Correos, nombres:
-  cosas que quieres recuperar en la respuesta.
-- **`block`.** Se corta de forma irreversible. Secretos puros como claves de API o
-  contraseñas: eso nunca debería volver, así que ni se guarda para rehidratar.
+- **`pass`.** Let it through. A functional value, like a loopback IP, that the model
+  needs in order to actually help you.
+- **`pseudonymize`.** Swap it for a reversible token. Emails, names: things you want
+  back in the response.
+- **`block`.** Cut it irreversibly. Pure secrets like API keys or passwords: those
+  should never come back, so they are not even stored for rehydration.
 
-La regla de oro es sencilla: **secreto que no necesitas de vuelta, block; dato
-personal que sí necesitas de vuelta, pseudonymize; dato funcional, pass.** Y hay un
-modo `shadow` que solo audita sin tocar nada, para calibrar las reglas antes de
-dejar que actúen y romper algo.
+The rule of thumb is simple: **a secret you do not need back, block; personal data
+you do need back, pseudonymize; functional data, pass.** And there is a `shadow` mode
+that only audits without touching anything, so you can calibrate the rules before
+letting them act and breaking something.
 
-## El modelo pequeño que viene: detección semántica (NER)
+## The small model that is coming: semantic detection (NER)
 
-Las expresiones regulares tienen un techo. Ven un correo porque tiene una `@`, pero
-no ven que "escríbele a María González, la responsable de soporte" contiene el nombre
-de una persona. Para eso hace falta entender el lenguaje, no solo emparejar patrones.
+Regular expressions have a ceiling. They see an email because it has an `@`, but they
+do not see that "email Maria Gonzalez, the support lead" contains a person's name.
+For that you need to understand language, not just match patterns.
 
-La siguiente pieza (**todavía no programada**, está en el roadmap) es un modelo de
-NER pequeño que corre **dentro del propio proxy**, en tu máquina, sin conexión a
-ningún servicio externo. Un modelo compacto de reconocimiento de entidades,
-ejecutado en proceso, que detecta nombres, direcciones y otras entidades que el regex
-no puede pillar.
+The next piece (**not built yet**, it is on the roadmap) is a small NER model that
+runs **inside the proxy itself**, on your machine, with no connection to any external
+service. A compact named-entity-recognition model, executed in-process, that detects
+names, addresses, and other entities the regex cannot catch.
 
-Lo interesante del enfoque es la división de trabajo: el modelo pequeño y local hace
-la parte delicada (encontrar y ocultar lo sensible) y el modelo grande de la nube
-hace la parte pesada (razonar sobre tu problema). El modelo grande nunca ve el dato;
-el modelo pequeño nunca sale de tu máquina.
+The interesting part of the approach is the division of labor: the small local model
+does the delicate part (finding and hiding what is sensitive) and the large cloud
+model does the heavy part (reasoning about your problem). The large model never sees
+the data; the small model never leaves your machine.
 
-## El vault y la coherencia de los tokens
+## The vault and token consistency
 
-Para que la rehidratación funcione, los tokens tienen que ser **coherentes**. Si
-`alice@empresa.com` se convierte en `[EMAIL_1]`, tiene que ser `[EMAIL_1]` durante
-toda la sesión, no `[EMAIL_1]` una vez y `[EMAIL_3]` a la siguiente. Si no, el modelo
-pierde el hilo de a quién te refieres y la conversación multi-turno se rompe.
+For rehydration to work, tokens have to be **consistent**. If `alice@company.com`
+becomes `[EMAIL_1]`, it has to stay `[EMAIL_1]` for the whole session, not `[EMAIL_1]`
+once and `[EMAIL_3]` the next time. Otherwise the model loses track of who you are
+referring to and the multi-turn conversation breaks.
 
-El vault es un mapa bidireccional en memoria que garantiza esa coherencia: antes de
-crear un token nuevo comprueba si el valor ya tiene uno y lo reutiliza. El formato
-`[TIPO_N]` con corchetes está elegido a propósito para que el modelo lo trate como
-un marcador y lo copie tal cual en vez de reescribirlo. Y como contiene PII real,
-vive cifrado, muere con la sesión, se borra de memoria de forma determinista y nunca
-aparece en los logs.
+The vault is a bidirectional in-memory map that guarantees that consistency: before
+creating a new token it checks whether the value already has one and reuses it. The
+`[TYPE_N]` format with brackets is chosen on purpose so the model treats it as a
+marker and copies it verbatim instead of rewriting it. And because it holds real PII,
+it lives encrypted, dies with the session, is wiped from memory deterministically,
+and never shows up in logs.
 
-## Rehidratación: la parte que hace que se sienta natural
+## Rehydration: the part that makes it feel natural
 
-Aquí está la diferencia entre "redacción" (tachar y ya) y "anonimización reversible".
-Un proxy que solo tacha te devuelve una respuesta llena de `[EMAIL_REDACTED]`: segura,
-pero incómoda de leer y de usar. Sift da un paso más y **deshace** la sustitución en
-la respuesta, para que la experiencia sea como si nunca hubiera habido un intermediario.
+This is the difference between "redaction" (cross it out and done) and "reversible
+anonymization". A proxy that only redacts hands you a response full of
+`[EMAIL_REDACTED]`: safe, but awkward to read and use. Sift goes one step further and
+**undoes** the swap in the response, so the experience is as if there had never been
+a middleman.
 
-Esto tiene su miga técnica, porque la respuesta llega en streaming, trozo a trozo. El
-rehidratador usa un buffer con ventana deslizante: acumula fragmentos, sustituye los
-tokens completos y retiene la cola que podría ser el principio de un token a medias
-(por ejemplo `[EMA`) hasta que llegue el siguiente trozo. También entra en los
-argumentos de las llamadas a herramientas: si el modelo responde
-`send_email(to="[EMAIL_1]")`, hay que devolver el correo real antes de que el agente
-ejecute esa acción, o mandaría el mail a un token literal.
+There is some technical nuance here, because the response arrives streamed, chunk by
+chunk. The rehydrator uses a sliding-window buffer: it accumulates fragments, swaps
+the complete tokens, and holds back the tail that could be the start of a half-formed
+token (for example `[EMA`) until the next chunk arrives. It also reaches into tool
+call arguments: if the model responds `send_email(to="[EMAIL_1]")`, the real email
+has to be restored before the agent runs that action, or it would send the mail to a
+literal token.
 
-El resultado, de cara al usuario, es que todo fluye. Ves nombres reales, correos
-reales, respuestas útiles. Lo único que cambió es que el modelo de la nube, por el
-camino, nunca llegó a verlos.
+The result, from the user's point of view, is that everything flows. You see real
+names, real emails, useful answers. The only thing that changed is that the cloud
+model, along the way, never got to see them.
 
-## Dónde está hoy y hacia dónde va
+## Where it is today and where it is going
 
-Sift se está construyendo por fases, y conviene ser honesto sobre qué funciona ya y
-qué no:
+Sift is being built in phases, and it is worth being honest about what works today
+and what does not:
 
-1. **Redacción regex de una dirección (hecho).** Proxy funcionando, detección por
-   patrones, redacción irreversible. Ya es útil por sí solo.
-2. **Motor de políticas (hecho).** `pass` / `redact` / `block` por categoría,
-   allowlist y modos shadow/enforce.
-3. **Vault reversible y rehidratación (siguiente).** El salto de "tachar" a
-   "anonimizar y devolver". Aquí entra el buffer de streaming.
-4. **Herramientas.** Rehidratar argumentos de tool_calls y escanear lo que el agente
-   lee.
-5. **NER local.** El modelo pequeño para la PII semántica.
-6. **Multiproveedor.** Adaptador para Anthropic además de OpenAI.
+1. **One-way regex redaction (done).** Working proxy, pattern-based detection,
+   irreversible redaction. Already useful on its own.
+2. **Policy engine (done).** `pass` / `redact` / `block` per category, allowlist,
+   and shadow/enforce modes.
+3. **Reversible vault and rehydration (next).** The jump from "crossing out" to
+   "anonymize and give back". This is where the streaming buffer comes in.
+4. **Tools.** Rehydrate tool_call arguments and scan what the agent reads.
+5. **Local NER.** The small model for semantic PII.
+6. **Multi-provider.** A canonical adapter for Anthropic in addition to OpenAI.
 
-El diagrama de arriba muestra el flujo completo, que es el objetivo. Hoy Sift hace la
-parte de detección y redacción; la tokenización reversible y la rehidratación son el
-siguiente hito.
+The diagram above shows the full flow, which is the goal. Today Sift does the
+detection and redaction part; reversible tokenization and rehydration are the next
+milestone.
 
-## Cierre
+## Closing
 
-La premisa de Sift-LLM es que no deberías tener que elegir entre un buen modelo y tu
-privacidad. Con un proxy local que anonimiza a la salida y rehidrata a la entrada, el
-dato sensible se queda en tu máquina y el modelo grande sigue haciendo su trabajo con
-la estructura del problema. Buena calidad y datos en casa, a la vez.
+The premise of Sift-LLM is that you should not have to choose between a good model and
+your privacy. With a local proxy that anonymizes on the way out and rehydrates on the
+way in, the sensitive data stays on your machine and the large model keeps doing its
+job on the structure of the problem. Good quality and data at home, at the same time.
 
-El proyecto es open source y está en desarrollo activo:
+The project is open source and under active development:
 [github.com/arturoaguileraa/sift-llm](https://github.com/arturoaguileraa/sift-llm).
