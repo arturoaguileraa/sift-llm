@@ -225,7 +225,8 @@ sift models
 
 | Comando | Qué hace |
 |---|---|
-| `sift serve --config policies.yaml` | Arranca el gateway (el proxy). Daemon persistente en `localhost:8787`. **Es el producto.** |
+| `sift serve --config policies.yaml` | Arranca el gateway (el proxy) en `localhost:8787`. **Es el producto.** `-d`/`--daemon` lo lanza en segundo plano; `--port` cambia el puerto. |
+| `sift stop` | Para un gateway en segundo plano lanzado con `--daemon`. |
 | `sift provider add` | Registra un proveedor upstream. Picker con flechas (populares + URL personalizada), o con flags `--url` / `--key-env` / `--api-key`. Descubre modelos y re-sincroniza opencode. |
 | `sift provider list` | Lista los proveedores registrados. |
 | `sift provider remove <name>` | Quita un proveedor. Re-sincroniza opencode. |
