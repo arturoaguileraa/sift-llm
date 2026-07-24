@@ -143,12 +143,17 @@ async fn handle_chat_completions(
     
     payload["model"] = serde_json::Value::String(final_model);
 
-    let api_key = match provider.get_api_key() {
-        Some(key) => key,
-        None => {
-            return (StatusCode::BAD_REQUEST, format!("API key not found in environment: {}", provider.key_env)).into_response();
-        }
-    };
+    // Local providers (e.g. Ollama) need no key. Only error when the provider
+    // declares a key source (env var or inline) but we couldn't resolve it.
+    let api_key = provider.get_api_key();
+    let expects_key = !provider.key_env.is_empty() || provider.api_key.is_some();
+    if expects_key && api_key.is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            format!("API key not found in environment: {}", provider.key_env),
+        )
+            .into_response();
+    }
 
     // 3. Scan & Redact payload recursively
     let audit_trail = redact_json_value(&mut payload, &state.policy_engine, &state.detector);
@@ -179,8 +184,10 @@ async fn handle_chat_completions(
     let is_stream = payload["stream"].as_bool().unwrap_or(false);
 
     let mut req_builder = state.client.post(&upstream_url)
-        .header(header::CONTENT_TYPE, "application/json")
-        .header(header::AUTHORIZATION, format!("Bearer {}", api_key));
+        .header(header::CONTENT_TYPE, "application/json");
+    if let Some(key) = &api_key {
+        req_builder = req_builder.header(header::AUTHORIZATION, format!("Bearer {}", key));
+    }
 
     // Handle Anthropic specific headers if needed
     if provider.name == "anthropic" {
