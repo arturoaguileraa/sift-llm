@@ -1,6 +1,7 @@
 use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::HashMap;
+use zeroize::Zeroize;
 
 /// Matches a complete pseudonymization token like `[EMAIL_1]` or
 /// `[CONNECTION_STRING_12]`. The trailing `_<digits>]` is deliberate: it means
@@ -28,6 +29,23 @@ pub struct Vault {
     forward: HashMap<String, String>, // "juan@empresa.com" -> "[EMAIL_1]"
     reverse: HashMap<String, String>, // "[EMAIL_1]" -> "juan@empresa.com"
     counters: HashMap<String, u32>,   // category -> highest number minted so far
+}
+
+impl Drop for Vault {
+    /// Overwrite the real PII values in the vault's heap buffers before they are
+    /// freed, so a request's secrets don't linger in memory after the response is
+    /// sent. Best-effort: copies made elsewhere (the rewritten payload, log lines)
+    /// are out of scope — this scrubs the vault's own storage. Counters hold no PII.
+    fn drop(&mut self) {
+        for (mut key, mut value) in std::mem::take(&mut self.forward) {
+            key.zeroize();
+            value.zeroize();
+        }
+        for (mut key, mut value) in std::mem::take(&mut self.reverse) {
+            key.zeroize();
+            value.zeroize();
+        }
+    }
 }
 
 impl Vault {
