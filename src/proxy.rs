@@ -6,7 +6,8 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::net::SocketAddr;
 use futures_util::stream::StreamExt;
 use reqwest::Client;
@@ -17,6 +18,9 @@ use crate::detect::RegexDetector;
 use crate::policy::{PolicyEngine, AuditRecord, Action};
 use crate::provider::ProviderRegistry;
 use crate::audit::log_audit;
+use crate::vault::Vault;
+use crate::rehydrate::{log_reveals, rehydrate_json_value, SseRehydrator};
+use crate::signature::{self, SignatureStore};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -24,6 +28,9 @@ pub struct AppState {
     pub detector: Arc<RegexDetector>,
     pub provider_registry: Arc<ProviderRegistry>,
     pub client: Client,
+    /// Provider opaque data (e.g. Gemini's thought_signature) captured from responses
+    /// and re-injected on later requests. See the `signature` module.
+    pub signatures: Arc<SignatureStore>,
 }
 
 pub async fn run_proxy(port: u16, policy_engine: PolicyEngine) -> Result<(), Box<dyn std::error::Error>> {
@@ -32,6 +39,7 @@ pub async fn run_proxy(port: u16, policy_engine: PolicyEngine) -> Result<(), Box
         detector: Arc::new(RegexDetector::new()),
         provider_registry: Arc::new(ProviderRegistry::new()),
         client: Client::new(),
+        signatures: Arc::new(Mutex::new(HashMap::new())),
     };
 
     let app = Router::new()
@@ -177,8 +185,13 @@ async fn handle_chat_completions(
             .into_response();
     }
 
-    // 3. Scan & Redact payload recursively
-    let audit_trail = redact_json_value(&mut payload, &state.policy_engine, &state.detector);
+    // 3. Scan & Redact payload recursively.
+    // The vault is per-request: it is filled here while tokenizing the outbound
+    // payload and drained below when rehydrating the response. Because we rehydrate,
+    // the harness only ever sees real values, so a request-scoped vault is enough —
+    // no session store needed for correctness.
+    let mut vault = Vault::new();
+    let audit_trail = redact_json_value(&mut payload, &state.policy_engine, &state.detector, &mut vault);
 
     // Check if any block action was triggered in Enforce mode
     let contains_block = audit_trail.iter().any(|rec| {
@@ -199,6 +212,11 @@ async fn handle_chat_completions(
     for record in &audit_trail {
         log_audit(record);
     }
+
+    // Re-inject any provider opaque data (e.g. Gemini's thought_signature) the harness
+    // dropped, so thinking models accept the tool-call continuation. Done after
+    // redaction so the opaque blob is never scanned or altered.
+    signature::inject_request(&mut payload, &state.signatures);
 
     // 4. Forward to upstream LLM API
     let upstream_url = format!("{}/chat/completions", provider.base_url);
@@ -231,29 +249,85 @@ async fn handle_chat_completions(
     let status = StatusCode::from_u16(upstream_res.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
 
     if is_stream {
-        // Return stream response
-        let stream = upstream_res.bytes_stream().map(|result| {
-            result.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
-        });
+        // Always feed the stream through the SSE-aware rehydrator: even with no PII it
+        // captures provider opaque data (thought_signature) — and when the vault is
+        // empty it forwards frames unchanged. It reassembles tokens split across delta
+        // events and transport chunks, and owns the vault because this stream outlives
+        // the request handler.
+        let upstream_stream = upstream_res.bytes_stream();
+        let rehydrator = SseRehydrator::new(vault, state.signatures.clone());
+        let out_stream = futures_util::stream::unfold(
+            (upstream_stream, rehydrator, false),
+            |(mut upstream, mut rehydrator, ended)| async move {
+                if ended {
+                    return None;
+                }
+                match upstream.next().await {
+                    Some(Ok(chunk)) => {
+                        let out = rehydrator.push(&chunk);
+                        Some((Ok::<Vec<u8>, std::io::Error>(out), (upstream, rehydrator, false)))
+                    }
+                    Some(Err(e)) => {
+                        let err = std::io::Error::new(std::io::ErrorKind::Other, e);
+                        Some((Err(err), (upstream, rehydrator, true)))
+                    }
+                    None => {
+                        // Upstream finished: emit whatever tail was held back.
+                        let tail = rehydrator.flush();
+                        Some((Ok(tail), (upstream, rehydrator, true)))
+                    }
+                }
+            },
+        );
+        let body = Body::from_stream(out_stream);
+
         Response::builder()
             .status(status)
             .header(header::CONTENT_TYPE, "text/event-stream")
             .header(header::CACHE_CONTROL, "no-cache")
             .header(header::CONNECTION, "keep-alive")
-            .body(Body::from_stream(stream))
+            .body(body)
             .unwrap()
     } else {
-        // Return full response body
+        // Read the full response, then rehydrate: restore original values behind
+        // every token the vault minted for this request (message content and
+        // tool-call arguments alike).
         let body_content = match upstream_res.bytes().await {
             Ok(b) => b,
             Err(e) => {
                 return (StatusCode::BAD_GATEWAY, format!("Failed to read upstream response: {}", e)).into_response();
             }
         };
+
+        // Always parse to capture provider opaque data (thought_signature), even when
+        // there is no PII to rehydrate; only re-serialize when we actually rewrote
+        // something, to avoid disturbing the upstream bytes needlessly.
+        let response_body = match serde_json::from_slice::<Value>(&body_content) {
+            Ok(json) => {
+                signature::capture_response(&json, &state.signatures);
+                if vault.is_empty() {
+                    Body::from(body_content)
+                } else {
+                    let mut json = json;
+                    let mut revealed = Vec::new();
+                    rehydrate_json_value(&mut json, &vault, &mut revealed);
+                    log_reveals(&vault, &revealed);
+                    match serde_json::to_vec(&json) {
+                        Ok(bytes) => Body::from(bytes),
+                        // Serialization back should never fail, but fall back to the
+                        // untouched upstream bytes rather than dropping the response.
+                        Err(_) => Body::from(body_content),
+                    }
+                }
+            }
+            // Non-JSON (e.g. an upstream error page): pass through unchanged.
+            Err(_) => Body::from(body_content),
+        };
+
         Response::builder()
             .status(status)
             .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(body_content))
+            .body(response_body)
             .unwrap()
     }
 }
@@ -262,17 +336,18 @@ fn redact_json_value(
     value: &mut Value,
     engine: &PolicyEngine,
     detector: &RegexDetector,
+    vault: &mut Vault,
 ) -> Vec<AuditRecord> {
     let mut audit_trail = Vec::new();
     match value {
         Value::String(s) => {
-            let (new_s, mut records) = engine.process_text(detector, s);
+            let (new_s, mut records) = engine.process_text(detector, s, vault);
             *s = new_s;
             audit_trail.append(&mut records);
         }
         Value::Array(arr) => {
             for v in arr {
-                audit_trail.append(&mut redact_json_value(v, engine, detector));
+                audit_trail.append(&mut redact_json_value(v, engine, detector, vault));
             }
         }
         Value::Object(obj) => {
@@ -280,7 +355,7 @@ fn redact_json_value(
                 if k == "model" || k == "role" || k == "id" {
                     continue;
                 }
-                audit_trail.append(&mut redact_json_value(v, engine, detector));
+                audit_trail.append(&mut redact_json_value(v, engine, detector, vault));
             }
         }
         _ => {}

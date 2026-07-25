@@ -56,7 +56,11 @@ static PATTERNS: Lazy<Vec<PatternDefinition>> = Lazy::new(|| {
         },
         PatternDefinition {
             category: "connection_string",
-            regex: Lazy::new(|| Regex::new(r#"(?i)\b(?:postgres|postgresql|mysql|mongodb|redis)://[^\s"']+"#).unwrap()),
+            // The final char class excludes trailing sentence punctuation so a string
+            // like "...prod." is not captured with the period — otherwise the same
+            // connection string written twice (with and without a trailing period)
+            // would be treated as two different secrets and break token coherence.
+            regex: Lazy::new(|| Regex::new(r#"(?i)\b(?:postgres|postgresql|mysql|mongodb|redis)://[^\s"']*[^\s"'.,;:!?)\]}>]"#).unwrap()),
             redaction_tag: "[CONNECTION_STRING_REDACTED]",
         },
         PatternDefinition {
@@ -158,5 +162,29 @@ mod tests {
         let (redacted, matches) = detector.redact(input);
         assert!(redacted.contains("[ANTHROPIC_KEY_REDACTED]"));
         assert_eq!(matches.len(), 1);
+    }
+
+    #[test]
+    fn connection_string_excludes_trailing_punctuation() {
+        let detector = RegexDetector::new();
+        // Same connection string, one at end of a sentence (trailing period). Both must
+        // match the identical text so downstream tokenization stays coherent. (scan()
+        // also returns the embedded email match, so we filter to the connection_string.)
+        let conn = |text: &str| -> String {
+            detector
+                .scan(text)
+                .into_iter()
+                .find(|m| m.category == "connection_string")
+                .map(|m| m.matched_text)
+                .expect("a connection_string match")
+        };
+        assert_eq!(
+            conn("use postgres://user:pw@db.internal:5432/prod."),
+            "postgres://user:pw@db.internal:5432/prod"
+        );
+        assert_eq!(
+            conn("use postgres://user:pw@db.internal:5432/prod."),
+            conn("use postgres://user:pw@db.internal:5432/prod here")
+        );
     }
 }

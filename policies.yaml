@@ -1,14 +1,19 @@
 # Sift Policy Configuration
-mode: shadow
+mode: enforce
 
+# Actions:
+#   pseudonymize  reversible token ([EMAIL_1]) restored in the response  <- default
+#   pass          leave untouched (functional data)
+#   redact        irreversible fixed tag ([EMAIL_REDACTED]), never restored
+#   block         reject the whole request before it reaches the LLM (400)
 policies:
-  api_key:           block
-  private_key:       block
-  password:          block
-  credit_card:       block
-  connection_string: redact
-  email:             redact
-  person_name:       redact
+  api_key:           pseudonymize
+  private_key:       pseudonymize
+  password:          pseudonymize
+  credit_card:       pseudonymize
+  connection_string: pseudonymize
+  email:             pseudonymize
+  person_name:       pseudonymize
   ip_address:        pass
 
 allowlist:

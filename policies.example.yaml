@@ -1,15 +1,20 @@
 # Sift Policy Configuration Example
-# Mode: shadow (audit only, do not alter prompt) | enforce (apply redactions/blocks)
+# Mode: shadow (audit only, do not alter prompt) | enforce (apply the actions below)
 mode: shadow
 
+# Actions per category:
+#   pseudonymize  reversible token ([EMAIL_1]), restored in the response  <- default
+#   redact        irreversible fixed tag ([EMAIL_REDACTED]), never restored
+#   block         reject the whole request before it reaches the model (400)
+#   pass          leave untouched (functional data the model needs)
 policies:
-  api_key:           block          # secrets: block or redact
-  private_key:       block
-  password:          block
-  credit_card:       block
-  connection_string: redact
-  email:             redact         # replaced with placeholder tag
-  person_name:       redact
+  api_key:           pseudonymize   # or `block` if you'd rather reject such requests
+  private_key:       pseudonymize
+  password:          pseudonymize
+  credit_card:       pseudonymize
+  connection_string: pseudonymize
+  email:             pseudonymize
+  person_name:       pseudonymize
   ip_address:        pass           # left untouched
 
 allowlist:

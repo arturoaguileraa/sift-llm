@@ -4,6 +4,9 @@ mod provider;
 mod audit;
 mod proxy;
 mod opencode;
+mod vault;
+mod rehydrate;
+mod signature;
 
 use clap::{Parser, Subcommand};
 use dialoguer::{theme::ColorfulTheme, Confirm, Input, Select};
@@ -178,7 +181,11 @@ async fn run(cli: Cli) {
                 config
             );
             
-            let (redacted_content, audit_trail) = policy_engine.process_text(&detector, &content);
+            // Scan is a one-shot diagnostic: the vault is throwaway here, we only
+            // want to preview what the gateway would send upstream.
+            let mut vault = vault::Vault::new();
+            let (redacted_content, audit_trail) =
+                policy_engine.process_text(&detector, &content, &mut vault);
 
             if audit_trail.is_empty() {
                 println!("{}", "✓ No sensitive data or PII detected.".green().bold());
