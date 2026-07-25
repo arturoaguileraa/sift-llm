@@ -8,22 +8,23 @@ use crate::vault::Vault;
 /// the assistant's message content and, importantly, the JSON-encoded `arguments`
 /// of tool calls: a token leaked into `arguments` would otherwise be executed
 /// literally by the harness (`send_email(to="[EMAIL_1]")`). Tokens the vault did
-/// not mint are left untouched.
-pub fn rehydrate_json_value(value: &mut Value, vault: &Vault) {
+/// not mint are left untouched. Restored token names are appended to `revealed` so
+/// the caller can log the inbound side.
+pub fn rehydrate_json_value(value: &mut Value, vault: &Vault, revealed: &mut Vec<String>) {
     match value {
         Value::String(s) => {
             if s.contains('[') {
-                *s = vault.rehydrate(s);
+                *s = vault.rehydrate_tracked(s, revealed);
             }
         }
         Value::Array(arr) => {
             for v in arr.iter_mut() {
-                rehydrate_json_value(v, vault);
+                rehydrate_json_value(v, vault, revealed);
             }
         }
         Value::Object(obj) => {
             for v in obj.values_mut() {
-                rehydrate_json_value(v, vault);
+                rehydrate_json_value(v, vault, revealed);
             }
         }
         _ => {}
@@ -92,11 +93,14 @@ impl SseRehydrator {
     }
 
     /// Slides one text piece through the token window: prepend the held-back fragment,
-    /// rehydrate complete tokens, then hold back a still-open token (`[` with no `]`
-    /// after it) for the next piece. Returns the portion safe to emit now.
+    /// rehydrate complete tokens (logging each restored one), then hold back a
+    /// still-open token (`[` with no `]` after it) for the next piece. Returns the
+    /// portion safe to emit now.
     fn slide(vault: &Vault, pending: &mut String, piece: &str) -> String {
         let combined = format!("{}{}", pending, piece);
-        let rehydrated = vault.rehydrate(&combined);
+        let mut revealed = Vec::new();
+        let rehydrated = vault.rehydrate_tracked(&combined, &mut revealed);
+        log_reveals(vault, &revealed);
         let split = rehydrated
             .rfind('[')
             .filter(|&i| !rehydrated[i..].contains(']'))
@@ -111,7 +115,11 @@ impl SseRehydrator {
     fn flush_pending(&mut self) -> Vec<u8> {
         let mut out = Vec::new();
         if !self.pending.is_empty() {
-            let tail = self.vault.rehydrate(&std::mem::take(&mut self.pending));
+            let mut revealed = Vec::new();
+            let tail = self
+                .vault
+                .rehydrate_tracked(&std::mem::take(&mut self.pending), &mut revealed);
+            log_reveals(&self.vault, &revealed);
             out.extend_from_slice(&content_frame(&tail));
         }
         // Deterministic order so the flushed frames are reproducible.
@@ -120,7 +128,9 @@ impl SseRehydrator {
         for index in indices {
             let held = self.pending_args.remove(&index).unwrap_or_default();
             if !held.is_empty() {
-                let tail = self.vault.rehydrate(&held);
+                let mut revealed = Vec::new();
+                let tail = self.vault.rehydrate_tracked(&held, &mut revealed);
+                log_reveals(&self.vault, &revealed);
                 out.extend_from_slice(&tool_args_frame(index, &tail));
             }
         }
@@ -201,6 +211,18 @@ impl SseRehydrator {
     }
 }
 
+/// Logs each restored token once (per call), pairing it with its real value.
+pub(crate) fn log_reveals(vault: &Vault, revealed: &[String]) {
+    let mut seen = std::collections::HashSet::new();
+    for token in revealed {
+        if seen.insert(token) {
+            if let Some(value) = vault.resolve(token) {
+                crate::audit::log_reveal(token, value);
+            }
+        }
+    }
+}
+
 /// Finds the first occurrence of `needle` in `haystack`.
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack
@@ -261,7 +283,9 @@ mod tests {
             }]
         });
 
-        rehydrate_json_value(&mut body, &vault);
+        let mut revealed = Vec::new();
+        rehydrate_json_value(&mut body, &vault, &mut revealed);
+        assert_eq!(revealed.len(), 2); // content + tool_call arguments
 
         let msg = &body["choices"][0]["message"];
         assert_eq!(msg["content"], "I emailed juan@empresa.com");

@@ -67,13 +67,26 @@ impl Vault {
     /// text. Used directly for buffered (non-streaming) responses and as the core
     /// primitive of the streaming rehydrator.
     pub fn rehydrate(&self, text: &str) -> String {
+        self.rehydrate_tracked(text, &mut Vec::new())
+    }
+
+    /// Like [`rehydrate`](Self::rehydrate), but records into `revealed` the name of
+    /// each token it restored (with repetitions), so callers can log the inbound
+    /// side of the exchange.
+    pub fn rehydrate_tracked(&self, text: &str, revealed: &mut Vec<String>) -> String {
         if self.reverse.is_empty() || !text.contains('[') {
             return text.to_string();
         }
         TOKEN_RE
             .replace_all(text, |caps: &regex::Captures| {
                 let token = &caps[0];
-                self.resolve(token).unwrap_or(token).to_string()
+                match self.resolve(token) {
+                    Some(value) => {
+                        revealed.push(token.to_string());
+                        value.to_string()
+                    }
+                    None => token.to_string(),
+                }
             })
             .into_owned()
     }

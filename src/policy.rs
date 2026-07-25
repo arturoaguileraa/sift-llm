@@ -82,6 +82,9 @@ pub struct AuditRecord {
     pub original_text: String,
     pub action_taken: Action,
     pub mode: Mode,
+    /// The token this value was pseudonymized to, if any. Lets the outbound log
+    /// pair up with the inbound rehydration log.
+    pub token: Option<String>,
 }
 
 pub struct PolicyEngine {
@@ -145,22 +148,17 @@ impl PolicyEngine {
                 self.get_action(&m.category)
             };
 
-            audit_trail.push(AuditRecord {
-                category: m.category.clone(),
-                original_text: m.matched_text.clone(),
-                action_taken: action,
-                mode: self.config.mode,
-            });
-
             result.push_str(&text[last_end..m.start]);
 
+            let mut token = None;
             match (self.config.mode, action) {
                 (Mode::Enforce, Action::Redact) => {
                     result.push_str(&m.redaction_tag);
                 }
                 (Mode::Enforce, Action::Pseudonymize) => {
-                    let token = vault.tokenize(&m.matched_text, &m.category);
-                    result.push_str(&token);
+                    let t = vault.tokenize(&m.matched_text, &m.category);
+                    result.push_str(&t);
+                    token = Some(t);
                 }
                 (Mode::Enforce, Action::Block) => {
                     result.push_str(&format!("[BLOCKED_{}]", m.category.to_uppercase()));
@@ -169,6 +167,14 @@ impl PolicyEngine {
                     result.push_str(&m.matched_text);
                 }
             }
+
+            audit_trail.push(AuditRecord {
+                category: m.category.clone(),
+                original_text: m.matched_text.clone(),
+                action_taken: action,
+                mode: self.config.mode,
+                token,
+            });
 
             last_end = m.end;
         }

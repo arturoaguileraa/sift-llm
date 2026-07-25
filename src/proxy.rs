@@ -18,7 +18,7 @@ use crate::policy::{PolicyEngine, AuditRecord, Action};
 use crate::provider::ProviderRegistry;
 use crate::audit::log_audit;
 use crate::vault::Vault;
-use crate::rehydrate::{rehydrate_json_value, SseRehydrator};
+use crate::rehydrate::{log_reveals, rehydrate_json_value, SseRehydrator};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -300,7 +300,9 @@ async fn handle_chat_completions(
         } else {
             match serde_json::from_slice::<Value>(&body_content) {
                 Ok(mut json) => {
-                    rehydrate_json_value(&mut json, &vault);
+                    let mut revealed = Vec::new();
+                    rehydrate_json_value(&mut json, &vault, &mut revealed);
+                    log_reveals(&vault, &revealed);
                     match serde_json::to_vec(&json) {
                         Ok(bytes) => Body::from(bytes),
                         // Serialization back should never fail, but fall back to the
