@@ -6,7 +6,8 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::net::SocketAddr;
 use futures_util::stream::StreamExt;
 use reqwest::Client;
@@ -19,6 +20,7 @@ use crate::provider::ProviderRegistry;
 use crate::audit::log_audit;
 use crate::vault::Vault;
 use crate::rehydrate::{log_reveals, rehydrate_json_value, SseRehydrator};
+use crate::signature::{self, SignatureStore};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -26,6 +28,9 @@ pub struct AppState {
     pub detector: Arc<RegexDetector>,
     pub provider_registry: Arc<ProviderRegistry>,
     pub client: Client,
+    /// Provider opaque data (e.g. Gemini's thought_signature) captured from responses
+    /// and re-injected on later requests. See the `signature` module.
+    pub signatures: Arc<SignatureStore>,
 }
 
 pub async fn run_proxy(port: u16, policy_engine: PolicyEngine) -> Result<(), Box<dyn std::error::Error>> {
@@ -34,6 +39,7 @@ pub async fn run_proxy(port: u16, policy_engine: PolicyEngine) -> Result<(), Box
         detector: Arc::new(RegexDetector::new()),
         provider_registry: Arc::new(ProviderRegistry::new()),
         client: Client::new(),
+        signatures: Arc::new(Mutex::new(HashMap::new())),
     };
 
     let app = Router::new()
@@ -207,6 +213,11 @@ async fn handle_chat_completions(
         log_audit(record);
     }
 
+    // Re-inject any provider opaque data (e.g. Gemini's thought_signature) the harness
+    // dropped, so thinking models accept the tool-call continuation. Done after
+    // redaction so the opaque blob is never scanned or altered.
+    signature::inject_request(&mut payload, &state.signatures);
+
     // 4. Forward to upstream LLM API
     let upstream_url = format!("{}/chat/completions", provider.base_url);
     
@@ -238,44 +249,37 @@ async fn handle_chat_completions(
     let status = StatusCode::from_u16(upstream_res.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
 
     if is_stream {
-        let body = if vault.is_empty() {
-            // Nothing was tokenized: pass the stream straight through.
-            let stream = upstream_res.bytes_stream().map(|result| {
-                result.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
-            });
-            Body::from_stream(stream)
-        } else {
-            // Rehydrate on the fly: feed each upstream chunk through the SSE-aware
-            // rehydrator (which reassembles tokens split across delta events and across
-            // transport chunks) and flush any held-back tail once upstream ends. The
-            // rehydrator owns the vault because this stream outlives the request handler.
-            let upstream_stream = upstream_res.bytes_stream();
-            let rehydrator = SseRehydrator::new(vault);
-            let out_stream = futures_util::stream::unfold(
-                (upstream_stream, rehydrator, false),
-                |(mut upstream, mut rehydrator, ended)| async move {
-                    if ended {
-                        return None;
+        // Always feed the stream through the SSE-aware rehydrator: even with no PII it
+        // captures provider opaque data (thought_signature) — and when the vault is
+        // empty it forwards frames unchanged. It reassembles tokens split across delta
+        // events and transport chunks, and owns the vault because this stream outlives
+        // the request handler.
+        let upstream_stream = upstream_res.bytes_stream();
+        let rehydrator = SseRehydrator::new(vault, state.signatures.clone());
+        let out_stream = futures_util::stream::unfold(
+            (upstream_stream, rehydrator, false),
+            |(mut upstream, mut rehydrator, ended)| async move {
+                if ended {
+                    return None;
+                }
+                match upstream.next().await {
+                    Some(Ok(chunk)) => {
+                        let out = rehydrator.push(&chunk);
+                        Some((Ok::<Vec<u8>, std::io::Error>(out), (upstream, rehydrator, false)))
                     }
-                    match upstream.next().await {
-                        Some(Ok(chunk)) => {
-                            let out = rehydrator.push(&chunk);
-                            Some((Ok::<Vec<u8>, std::io::Error>(out), (upstream, rehydrator, false)))
-                        }
-                        Some(Err(e)) => {
-                            let err = std::io::Error::new(std::io::ErrorKind::Other, e);
-                            Some((Err(err), (upstream, rehydrator, true)))
-                        }
-                        None => {
-                            // Upstream finished: emit whatever tail was held back.
-                            let tail = rehydrator.flush();
-                            Some((Ok(tail), (upstream, rehydrator, true)))
-                        }
+                    Some(Err(e)) => {
+                        let err = std::io::Error::new(std::io::ErrorKind::Other, e);
+                        Some((Err(err), (upstream, rehydrator, true)))
                     }
-                },
-            );
-            Body::from_stream(out_stream)
-        };
+                    None => {
+                        // Upstream finished: emit whatever tail was held back.
+                        let tail = rehydrator.flush();
+                        Some((Ok(tail), (upstream, rehydrator, true)))
+                    }
+                }
+            },
+        );
+        let body = Body::from_stream(out_stream);
 
         Response::builder()
             .status(status)
@@ -295,11 +299,16 @@ async fn handle_chat_completions(
             }
         };
 
-        let response_body = if vault.is_empty() {
-            Body::from(body_content)
-        } else {
-            match serde_json::from_slice::<Value>(&body_content) {
-                Ok(mut json) => {
+        // Always parse to capture provider opaque data (thought_signature), even when
+        // there is no PII to rehydrate; only re-serialize when we actually rewrote
+        // something, to avoid disturbing the upstream bytes needlessly.
+        let response_body = match serde_json::from_slice::<Value>(&body_content) {
+            Ok(json) => {
+                signature::capture_response(&json, &state.signatures);
+                if vault.is_empty() {
+                    Body::from(body_content)
+                } else {
+                    let mut json = json;
                     let mut revealed = Vec::new();
                     rehydrate_json_value(&mut json, &vault, &mut revealed);
                     log_reveals(&vault, &revealed);
@@ -310,9 +319,9 @@ async fn handle_chat_completions(
                         Err(_) => Body::from(body_content),
                     }
                 }
-                // Non-JSON (e.g. an upstream error page): pass through unchanged.
-                Err(_) => Body::from(body_content),
             }
+            // Non-JSON (e.g. an upstream error page): pass through unchanged.
+            Err(_) => Body::from(body_content),
         };
 
         Response::builder()

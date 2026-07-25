@@ -1,7 +1,9 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use serde_json::Value;
 
+use crate::signature::{self, SignatureStore};
 use crate::vault::Vault;
 
 /// Walks a parsed JSON response and rehydrates every string in place. This covers
@@ -58,15 +60,22 @@ pub struct SseRehydrator {
     pending: String,
     /// Per-tool-call `arguments` held back mid-token, keyed by the tool call's index.
     pending_args: HashMap<u64, String>,
+    /// Shared store to capture provider opaque data (e.g. thought_signature) into.
+    signatures: Arc<SignatureStore>,
+    /// Maps a streamed tool call's `index` to its `id` (the id arrives in the first
+    /// delta; opaque data may arrive in the same or a later delta).
+    tool_ids: HashMap<u64, String>,
 }
 
 impl SseRehydrator {
-    pub fn new(vault: Vault) -> Self {
+    pub fn new(vault: Vault, signatures: Arc<SignatureStore>) -> Self {
         Self {
             vault,
             raw: Vec::new(),
             pending: String::new(),
             pending_args: HashMap::new(),
+            signatures,
+            tool_ids: HashMap::new(),
         }
     }
 
@@ -175,6 +184,17 @@ impl SseRehydrator {
             Err(_) => return event.to_vec(),
         };
 
+        // Capture provider opaque data (e.g. Gemini's thought_signature) on every
+        // response, independent of PII — it must round-trip even when nothing was
+        // pseudonymized. This is what the buffered gating got wrong before.
+        capture_delta_signatures(&json, &mut self.tool_ids, &self.signatures);
+
+        // With an empty vault there is nothing to rehydrate; forward the frame
+        // unchanged (no reframing of ordinary text) now that we have captured above.
+        if self.vault.is_empty() {
+            return event.to_vec();
+        }
+
         let mut modified = false;
 
         // 1. Text content delta.
@@ -207,6 +227,34 @@ impl SseRehydrator {
         } else {
             // No text/tool deltas (role marker, finish_reason only): pass through.
             event.to_vec()
+        }
+    }
+}
+
+/// Captures provider opaque data from a streamed `delta.tool_calls` array, keyed by
+/// tool_call id. The id arrives with the first delta of a call and is tracked in
+/// `tool_ids` so opaque data arriving in the same or a later delta can be attributed.
+fn capture_delta_signatures(
+    json: &Value,
+    tool_ids: &mut HashMap<u64, String>,
+    store: &SignatureStore,
+) {
+    let Some(tool_calls) = json["choices"][0]["delta"]["tool_calls"].as_array() else {
+        return;
+    };
+    for tc in tool_calls {
+        let index = tc["index"].as_u64().unwrap_or(0);
+        if let Some(id) = tc["id"].as_str() {
+            tool_ids.insert(index, id.to_string());
+        }
+        if let Some(extra) = tc.get("extra_content").filter(|v| !v.is_null()) {
+            let id = tc["id"]
+                .as_str()
+                .map(str::to_string)
+                .or_else(|| tool_ids.get(&index).cloned());
+            if let Some(id) = id {
+                signature::remember(store, &id, extra);
+            }
         }
     }
 }
@@ -264,6 +312,11 @@ mod tests {
         let mut vault = Vault::new();
         let token = vault.tokenize(value, category);
         (vault, token)
+    }
+
+    /// A fresh, empty signature store for tests that don't care about capture.
+    fn store() -> Arc<SignatureStore> {
+        Arc::new(std::sync::Mutex::new(HashMap::new()))
     }
 
     #[test]
@@ -374,7 +427,7 @@ mod tests {
         // The realistic case: the model streams "[EMAIL_1]" as separate content
         // deltas, each in its own SSE event — never contiguous in the raw bytes.
         let (vault, _) = vault_with("juan@empresa.com", "email");
-        let mut r = SseRehydrator::new(vault);
+        let mut r = SseRehydrator::new(vault, store());
 
         let stream = format!(
             "{}{}{}{}data: [DONE]\n\n",
@@ -391,7 +444,7 @@ mod tests {
     fn sse_reassembles_when_transport_splits_an_event() {
         // On top of delta framing, a network chunk cuts an SSE event in half.
         let (vault, _) = vault_with("juan@empresa.com", "email");
-        let mut r = SseRehydrator::new(vault);
+        let mut r = SseRehydrator::new(vault, store());
 
         let full = format!("{}{}data: [DONE]\n\n", delta("hi [EMAIL"), delta("_1] there"));
         let bytes = full.as_bytes();
@@ -403,7 +456,7 @@ mod tests {
     #[test]
     fn sse_passes_through_streams_without_tokens() {
         let vault = Vault::new(); // empty vault path is handled in proxy, but be safe
-        let mut r = SseRehydrator::new(vault);
+        let mut r = SseRehydrator::new(vault, store());
         let stream = format!("{}data: [DONE]\n\n", delta("just plain text"));
         let out = run_sse(&mut r, &[stream.as_bytes()]);
         assert_eq!(visible_text(&out), "just plain text");
@@ -415,7 +468,7 @@ mod tests {
         // The model streams send_email(to="[EMAIL_1]") as JSON-string fragments, with
         // the token split across two of them: `{"to": "[EMA` | `IL_1]"}`.
         let (vault, _) = vault_with("juan@empresa.com", "email");
-        let mut r = SseRehydrator::new(vault);
+        let mut r = SseRehydrator::new(vault, store());
 
         let stream = format!(
             "{}{}{}data: [DONE]\n\n",
@@ -437,7 +490,7 @@ mod tests {
         // A literal `[` from a JSON array in arguments must not be mistaken for a token
         // nor corrupted, even when the array spans two argument fragments.
         let (vault, _) = vault_with("juan@empresa.com", "email");
-        let mut r = SseRehydrator::new(vault);
+        let mut r = SseRehydrator::new(vault, store());
 
         let stream = format!(
             "{}{}data: [DONE]\n\n",
@@ -450,5 +503,31 @@ mod tests {
         assert_eq!(args, "{\"cc\": [\"juan@empresa.com\"]}");
         let parsed: Value = serde_json::from_str(&args).unwrap();
         assert_eq!(parsed["cc"][0], "juan@empresa.com");
+    }
+
+    #[test]
+    fn sse_captures_tool_call_thought_signature() {
+        let (vault, _) = vault_with("juan@empresa.com", "email");
+        let sigs = store();
+        let mut r = SseRehydrator::new(vault, sigs.clone());
+
+        // First delta of a tool call: carries id + Gemini's opaque extra_content.
+        let first = format!(
+            "data: {}\n\n",
+            json!({ "choices": [{ "index": 0, "delta": { "tool_calls": [{
+                "index": 0,
+                "id": "call_xyz",
+                "extra_content": { "google": { "thought_signature": "SIG==" } },
+                "function": { "name": "send_email", "arguments": "{\"to\": \"" }
+            }] } }] })
+        );
+        let stream = format!("{}{}data: [DONE]\n\n", first, args_delta(0, "[EMAIL_1]\"}"));
+        let _ = run_sse(&mut r, &[stream.as_bytes()]);
+
+        let captured = sigs.lock().unwrap();
+        assert_eq!(
+            captured["call_xyz"]["google"]["thought_signature"],
+            "SIG=="
+        );
     }
 }

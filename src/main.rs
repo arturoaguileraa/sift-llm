@@ -6,6 +6,7 @@ mod proxy;
 mod opencode;
 mod vault;
 mod rehydrate;
+mod signature;
 
 use clap::{Parser, Subcommand};
 use dialoguer::{theme::ColorfulTheme, Confirm, Input, Select};
