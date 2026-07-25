@@ -10,6 +10,7 @@ pub fn log_audit(record: &AuditRecord) {
     let action_str = match record.action_taken {
         Action::Pass => "PASSED".green().bold(),
         Action::Redact => "REDACTED".cyan().bold(),
+        Action::Pseudonymize => "PSEUDONYMIZED".blue().bold(),
         Action::Block => "BLOCKED".red().bold(),
     };
 
