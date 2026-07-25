@@ -238,10 +238,17 @@ once, point your agent at it, and it protects every request automatically.
       rehydrated in both buffered and streamed responses; tool-result content in the
       request is scanned like any other field by the recursive redactor.
 - [ ] Phase 5: semantic detection (NER via ONNX)
-- [ ] Native Anthropic support (`/v1/messages`, not just `/v1/chat/completions`)
+- [ ] Native provider protocols (Gemini `generateContent`, Anthropic `/v1/messages`),
+      not just the OpenAI-compatible `/v1/chat/completions` surface
 
 ## Limitations
 
+- **OpenAI-compatible protocol only.** Sift speaks `/v1/chat/completions`, so it routes
+  every provider through its OpenAI-compatible surface. This breaks provider features
+  that live outside that schema — notably **Gemini 3 "thinking" models used with tools**,
+  which require a `thought_signature` on function calls that the OpenAI schema cannot
+  carry across turns (the native Gemini API handles it). Use OpenAI, Groq/Llama,
+  Anthropic, or non-thinking Gemini models until native provider adapters land.
 - **Rehydration is exact-match**, so if the model mangles a token (splits it oddly or
   changes its case) it may not be restored. The `[TIPO_N]` format is chosen because
   models tend to copy it verbatim.
