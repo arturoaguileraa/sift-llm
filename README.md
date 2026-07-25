@@ -4,9 +4,11 @@
 and any OpenAI/Anthropic-compatible tool) and the model API, and strips sensitive
 data from your prompts before they ever leave your machine.
 
-> Status: work in progress. Regex redaction, a policy engine (shadow/enforce), and
-> multi-provider routing with model discovery work today. Reversible pseudonymization
-> (Phase 3) is next. See [Roadmap](#roadmap).
+> Status: work in progress. Regex detection, a policy engine (shadow/enforce),
+> multi-provider routing with model discovery, and **reversible pseudonymization with
+> response rehydration** (buffered and streaming) work today. Next: rehydrating
+> streamed tool-call argument deltas, and semantic (NER) detection. See
+> [Roadmap](#roadmap).
 
 ![Sift demo](docs/demo.gif)
 
@@ -34,15 +36,15 @@ while keeping the response useful.
 ## How it works
 
 Sift is a local reverse proxy with two directions. **Outbound**, it detects sensitive
-data, applies your policy, and swaps each value for a stable token before the request
-leaves your machine. **Inbound**, it rehydrates those tokens back to the real values in
-the streamed response, so your agent sees usable output while the provider never sees
-your PII. A per-session **vault** holds the `token ⇄ value` mapping, encrypted in memory.
+data, applies your policy, and swaps each value for a coherent, stable token
+(`[EMAIL_1]`) before the request leaves your machine. **Inbound**, it rehydrates those
+tokens back to the real values in the response — buffered or streamed — so your agent
+sees usable output while the provider never sees your PII. A **vault** holds the
+`token ⇄ value` mapping; it is scoped to a single request, because rehydrating the
+response means your agent always resends real values on the next turn, so no persistent
+session store is needed.
 
 ![Sift-LLM architecture](docs/architecture.svg)
-
-> This diagram is the target flow. Today Sift does one-way redaction (Phases 1 and 2);
-> the reversible vault and streamed rehydration land in Phase 3. See [Roadmap](#roadmap).
 
 For the longer story on why "cloud vs local" is a false trade-off, how detection works,
 and where a small local model fits, read [**Why Sift-LLM**](docs/why-sift-llm.md).
@@ -157,8 +159,9 @@ each tagged `(Sift secured)`.
 > }
 > ```
 
-That's it. Use OpenCode as usual. Sift intercepts every request, redacts what your
-policy says, forwards it with your real key, and streams the response back.
+That's it. Use OpenCode as usual. Sift intercepts every request, applies your policy
+(pseudonymizing sensitive values), forwards it with your real key, and rehydrates the
+tokens back to real values in the streamed response.
 
 ## Configuration
 
@@ -168,11 +171,11 @@ policy says, forwards it with your real key, and streams the response back.
 mode: shadow          # shadow (log only, no changes) | enforce (act)
 
 policies:
-  api_key:     block          # never leaves, not even redacted
-  password:    block
-  credit_card: block
-  email:       redact         # replaced with a placeholder
-  person_name: redact
+  api_key:     pseudonymize   # reversible token, restored in the response
+  password:    pseudonymize
+  credit_card: pseudonymize
+  email:       pseudonymize
+  person_name: pseudonymize
   ip_address:  pass           # left untouched (often needed in code)
 
 allowlist:
@@ -180,15 +183,23 @@ allowlist:
   - "127.0.0.1"
 ```
 
-Start in `shadow` mode to see what *would* be redacted without breaking anything,
-then switch to `enforce` once the policy fits your workflow.
+Each category maps to one **action**:
+
+- `pseudonymize` — replace with a coherent token (`[EMAIL_1]`) and **restore it in the
+  response**. Reversible; the model never sees the real value. This is the default.
+- `redact` — replace with a fixed tag (`[EMAIL_REDACTED]`). Irreversible, never restored.
+- `block` — reject the whole request before it reaches the model (returns a 400).
+- `pass` — leave the value untouched (functional data you want the model to see).
+
+Start in `shadow` mode to see what *would* happen without changing anything, then
+switch to `enforce` once the policy fits your workflow.
 
 ## How it works
 
 ```
 opencode ──► [ Sift :8787 ] ──► provider API
-   ▲              │  detect  → policy → redact
-   └── response ◄─┘  forward with real key
+   ▲              │  detect → policy → tokenize → forward with real key
+   └── response ◄─┘  rehydrate tokens ◄── (buffered or streamed)
 ```
 
 Sift exposes an OpenAI-compatible `/v1` endpoint, so your agent talks to it exactly
@@ -219,17 +230,24 @@ once, point your agent at it, and it protects every request automatically.
 - [x] Phase 1: regex redaction + streaming passthrough
 - [x] Phase 2: policy engine (`pass` / `redact` / `block`, allowlist, shadow/enforce)
 - [x] Phase 6: multi-provider registry + routing, model discovery, OpenCode sync
-- [ ] Phase 3: reversible pseudonymization (coherent tokens + response rehydration)
-- [ ] Phase 4: tool-call and tool-result handling
+- [x] Phase 3: reversible pseudonymization — coherent tokens + response rehydration,
+      buffered **and** streaming (tokens reassembled across delta/transport splits).
+      Uses a per-request vault; a persistent session vault is only needed for
+      stateful APIs and is deliberately out of the main path.
+- [ ] Phase 4: tool-call and tool-result handling (streamed tool-call **argument
+      deltas** are not rehydrated yet; the non-streaming path already covers them)
 - [ ] Phase 5: semantic detection (NER via ONNX)
 
 ## Limitations
 
-- **Images and other media pass through untouched** in the current phase.
+- **Streamed tool-call argument deltas are not rehydrated yet**, so a token could reach
+  the agent inside a streamed tool call. Buffered (non-streaming) responses rehydrate
+  tool-call arguments fully. This closes in Phase 4.
+- **Images and other media pass through untouched.**
 - **Tool execution happens inside the agent**, so a tool that makes its own network
   request bypasses Sift. Sift only sees traffic to the model.
-- Regex detection (current phase) catches structured secrets well but misses
-  contextual PII. Semantic detection lands in Phase 5.
+- Regex detection catches structured secrets well but misses contextual PII. Semantic
+  detection lands in Phase 5.
 
 ## Uninstall
 
