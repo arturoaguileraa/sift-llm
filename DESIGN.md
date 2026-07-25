@@ -149,11 +149,25 @@ trata en tres puntos:
 
 ## 9. Streaming (la parte fina)
 
-El rehidratador usa un buffer con ventana deslizante: acumula chunks, sustituye
-tokens completos, y **retiene la cola que podría ser el inicio de un token a
-medias** (`[EMA`) hasta que llegue el siguiente chunk. Los argumentos de tool_calls
-llegan como deltas que forman un JSON: se bufferizan hasta estar completos antes de
-rehidratar (no se rehidrata JSON parcial).
+El `SseRehydrator` trabaja a dos niveles porque un token se puede partir de dos formas:
+
+1. **Framing de transporte.** Un chunk de red puede cortar un evento SSE (o un carácter
+   UTF-8 multibyte) por la mitad. Se bufferizan bytes crudos y solo se procesan eventos
+   completos, delimitados por la línea en blanco `\n\n`.
+2. **Framing de delta.** El modelo emite un token `[EMAIL_1]` en varios trozos de
+   `delta.content`, cada uno en su propio evento, así que **el token nunca está contiguo
+   en los bytes**. Se reensambla a nivel de texto: una ventana deslizante acumula el
+   fragmento a medias en `pending` y lo libera (rehidratado) al completarse el token,
+   reteniendo la cola que podría ser el inicio de un token (`[EMA`).
+
+**Tool_calls sobre streaming.** Los `arguments` llegan como fragmentos de un string JSON.
+En vez de bufferizar el JSON completo (que retrasaría la emisión), se aplica la **misma**
+ventana deslizante pero **por cada tool_call** (buffer `pending_args` indexado por el
+`index` del call). Un `[` de un array JSON legítimo nunca se confunde con un token porque
+el patrón de token exige mayúsculas + `_dígitos]` (`[TIPO_N]`); a lo sumo se retiene un
+instante hasta el siguiente fragmento. Caveat: como la sustitución es un splice de texto,
+un valor con un metacarácter JSON (una comilla dentro de una password) podría romper un
+frame; emails/nombres/IPs no se ven afectados.
 
 ## 10. Problemas conocidos (documentados desde el diseño)
 
@@ -195,9 +209,12 @@ añadiendo features hasta la anonimización reversible completa.
 - **Fase 3b — Vault por sesión (fuera de la ruta principal).** Solo necesario para
   harnesses que no reenvían el historial completo (APIs con estado). Vault cifrado, con
   TTL y `zeroize`. Ver la discusión en §6.
-- **Fase 4 — Tools.** Rehidratar los argumentos de los tool_calls (el path buffered ya
-  lo hace; **pendiente** sobre streaming: bufferizar el JSON de args completo por call
-  antes de sustituir) + escanear los tool_results como fuente principal de PII.
+- **Fase 4 — Tools (IMPLEMENTADA).** Rehidratación de los `arguments` de los tool_calls
+  en buffered **y** en streaming: en SSE cada tool_call se reensambla en su propio buffer
+  por `index`, deslizando los fragmentos de `arguments` igual que el `content` (un `[` de
+  array JSON nunca se confunde con un token `[TIPO_N]`). Los tool_results de la petición
+  ya se escanean como cualquier otro campo por la redacción recursiva. Punto ciego que
+  queda: la ejecución de la tool (egress fuera del modelo), fuera de alcance.
 - **Fase 5 — NER (`ort`).** Detección semántica de nombres/direcciones más allá de
   los patrones regex.
 - **Fase 6 — Multiproveedor.** Adaptador canónico para Anthropic además de OpenAI.

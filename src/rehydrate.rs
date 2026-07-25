@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde_json::Value;
 
 use crate::vault::Vault;
@@ -43,16 +45,18 @@ pub fn rehydrate_json_value(value: &mut Value, vault: &Vault) {
 ///    (rehydrated) once complete.
 ///
 /// It **owns** its vault because the streamed response body outlives the request
-/// handler. Scope note: only assistant `delta.content` is rehydrated here; streamed
-/// `tool_call` argument deltas are a documented follow-up (they need buffering the
-/// whole arguments JSON per call before substitution). The non-streaming path already
-/// rehydrates tool-call arguments fully.
+/// handler. It rehydrates both the assistant's `delta.content` and the streamed
+/// `tool_call` argument deltas, each with its own held-back token buffer — `content`
+/// in `pending`, and each tool call (keyed by its stream `index`) in `pending_args`.
+/// A token straddling delta boundaries in either place is reassembled the same way.
 pub struct SseRehydrator {
     vault: Vault,
     /// Raw bytes of an SSE event not yet terminated by `\n\n`.
     raw: Vec<u8>,
-    /// Content held back mid-token, carried across events until the token completes.
+    /// `delta.content` held back mid-token, carried across events until it completes.
     pending: String,
+    /// Per-tool-call `arguments` held back mid-token, keyed by the tool call's index.
+    pending_args: HashMap<u64, String>,
 }
 
 impl SseRehydrator {
@@ -61,6 +65,7 @@ impl SseRehydrator {
             vault,
             raw: Vec::new(),
             pending: String::new(),
+            pending_args: HashMap::new(),
         }
     }
 
@@ -86,14 +91,40 @@ impl SseRehydrator {
         out
     }
 
-    /// Rehydrates and emits whatever partial content is still buffered, as its own
-    /// SSE content frame. Empty if nothing is pending.
+    /// Slides one text piece through the token window: prepend the held-back fragment,
+    /// rehydrate complete tokens, then hold back a still-open token (`[` with no `]`
+    /// after it) for the next piece. Returns the portion safe to emit now.
+    fn slide(vault: &Vault, pending: &mut String, piece: &str) -> String {
+        let combined = format!("{}{}", pending, piece);
+        let rehydrated = vault.rehydrate(&combined);
+        let split = rehydrated
+            .rfind('[')
+            .filter(|&i| !rehydrated[i..].contains(']'))
+            .unwrap_or(rehydrated.len());
+        let emit = rehydrated[..split].to_string();
+        *pending = rehydrated[split..].to_string();
+        emit
+    }
+
+    /// Emits whatever partial content and tool-call arguments are still buffered, each
+    /// as its own trailing SSE frame. Empty if nothing is pending.
     fn flush_pending(&mut self) -> Vec<u8> {
-        if self.pending.is_empty() {
-            return Vec::new();
+        let mut out = Vec::new();
+        if !self.pending.is_empty() {
+            let tail = self.vault.rehydrate(&std::mem::take(&mut self.pending));
+            out.extend_from_slice(&content_frame(&tail));
         }
-        let tail = self.vault.rehydrate(&std::mem::take(&mut self.pending));
-        content_frame(&tail)
+        // Deterministic order so the flushed frames are reproducible.
+        let mut indices: Vec<u64> = self.pending_args.keys().copied().collect();
+        indices.sort_unstable();
+        for index in indices {
+            let held = self.pending_args.remove(&index).unwrap_or_default();
+            if !held.is_empty() {
+                let tail = self.vault.rehydrate(&held);
+                out.extend_from_slice(&tool_args_frame(index, &tail));
+            }
+        }
+        out
     }
 
     fn process_event(&mut self, event: &[u8]) -> Vec<u8> {
@@ -121,7 +152,7 @@ impl SseRehydrator {
             Some(p) => p,
         };
 
-        // End-of-stream sentinel: release any held content *before* it.
+        // End-of-stream sentinel: release any held fragments *before* it.
         if payload.trim() == "[DONE]" {
             let mut out = self.flush_pending();
             out.extend_from_slice(event);
@@ -134,26 +165,39 @@ impl SseRehydrator {
             Err(_) => return event.to_vec(),
         };
 
-        let content = json["choices"][0]["delta"]["content"].as_str();
-        let Some(content) = content else {
-            // No text delta (role marker, finish_reason, tool_calls-only): pass through.
-            return event.to_vec();
-        };
+        let mut modified = false;
 
-        // Reassemble across deltas: prepend whatever token fragment we held back.
-        let combined = format!("{}{}", self.pending, content);
-        let rehydrated = self.vault.rehydrate(&combined);
+        // 1. Text content delta.
+        if let Some(content) = json["choices"][0]["delta"]["content"].as_str().map(str::to_string) {
+            let emit = Self::slide(&self.vault, &mut self.pending, &content);
+            json["choices"][0]["delta"]["content"] = Value::String(emit);
+            modified = true;
+        }
 
-        // Hold back a still-open token (`[` with no `]` after it) for the next delta.
-        let split = rehydrated
-            .rfind('[')
-            .filter(|&i| !rehydrated[i..].contains(']'))
-            .unwrap_or(rehydrated.len());
-        let emit = rehydrated[..split].to_string();
-        self.pending = rehydrated[split..].to_string();
+        // 2. Tool-call argument deltas. Each element carries an `index` identifying
+        //    which tool call it belongs to; its `arguments` is a fragment of a JSON
+        //    string being streamed. We slide each through its own per-index buffer so a
+        //    token split across fragments (`[EMA` | `IL_1]`) is reassembled. A literal
+        //    `[` from a JSON array is never a token (tokens are `[UPPER_N]`), so it is
+        //    at worst briefly held back, never corrupted.
+        if let Some(tool_calls) = json["choices"][0]["delta"]["tool_calls"].as_array_mut() {
+            for tc in tool_calls.iter_mut() {
+                let index = tc["index"].as_u64().unwrap_or(0);
+                if let Some(args) = tc["function"]["arguments"].as_str().map(str::to_string) {
+                    let pending = self.pending_args.entry(index).or_default();
+                    let emit = Self::slide(&self.vault, pending, &args);
+                    tc["function"]["arguments"] = Value::String(emit);
+                    modified = true;
+                }
+            }
+        }
 
-        json["choices"][0]["delta"]["content"] = Value::String(emit);
-        frame_from_json(&json)
+        if modified {
+            frame_from_json(&json)
+        } else {
+            // No text/tool deltas (role marker, finish_reason only): pass through.
+            event.to_vec()
+        }
     }
 }
 
@@ -173,6 +217,18 @@ fn frame_from_json(value: &Value) -> Vec<u8> {
 fn content_frame(text: &str) -> Vec<u8> {
     let value = serde_json::json!({
         "choices": [{ "index": 0, "delta": { "content": text } }]
+    });
+    frame_from_json(&value)
+}
+
+/// Builds an SSE frame carrying `args` as a tool-call `arguments` chunk for the tool
+/// call at `index`. Used to flush a held-back arguments tail at end of stream.
+fn tool_args_frame(index: u64, args: &str) -> Vec<u8> {
+    let value = serde_json::json!({
+        "choices": [{
+            "index": 0,
+            "delta": { "tool_calls": [{ "index": index, "function": { "arguments": args } }] }
+        }]
     });
     frame_from_json(&value)
 }
@@ -252,6 +308,43 @@ mod tests {
         )
     }
 
+    /// An SSE event carrying a tool-call `arguments` fragment for tool call `index`.
+    fn args_delta(index: u64, args: &str) -> String {
+        format!(
+            "data: {}\n\n",
+            json!({
+                "choices": [{
+                    "index": 0,
+                    "delta": { "tool_calls": [{ "index": index, "function": { "arguments": args } }] }
+                }]
+            })
+        )
+    }
+
+    /// Concatenates every streamed tool-call `arguments` fragment for `index`.
+    fn visible_args(sse: &str, index: u64) -> String {
+        let mut s = String::new();
+        for line in sse.lines() {
+            if let Some(payload) = line.strip_prefix("data: ") {
+                if payload.trim() == "[DONE]" {
+                    continue;
+                }
+                if let Ok(v) = serde_json::from_str::<Value>(payload) {
+                    if let Some(calls) = v["choices"][0]["delta"]["tool_calls"].as_array() {
+                        for tc in calls {
+                            if tc["index"].as_u64() == Some(index) {
+                                if let Some(a) = tc["function"]["arguments"].as_str() {
+                                    s.push_str(a);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        s
+    }
+
     #[test]
     fn sse_reassembles_a_token_split_across_delta_events() {
         // The realistic case: the model streams "[EMAIL_1]" as separate content
@@ -291,5 +384,47 @@ mod tests {
         let out = run_sse(&mut r, &[stream.as_bytes()]);
         assert_eq!(visible_text(&out), "just plain text");
         assert!(out.contains("data: [DONE]"));
+    }
+
+    #[test]
+    fn sse_rehydrates_tool_call_arguments_split_across_deltas() {
+        // The model streams send_email(to="[EMAIL_1]") as JSON-string fragments, with
+        // the token split across two of them: `{"to": "[EMA` | `IL_1]"}`.
+        let (vault, _) = vault_with("juan@empresa.com", "email");
+        let mut r = SseRehydrator::new(vault);
+
+        let stream = format!(
+            "{}{}{}data: [DONE]\n\n",
+            args_delta(0, "{\"to\": \"[EMA"),
+            args_delta(0, "IL_1"),
+            args_delta(0, "]\"}"),
+        );
+        let out = run_sse(&mut r, &[stream.as_bytes()]);
+
+        // Reassembled arguments must carry the real value, and still be valid JSON.
+        let args = visible_args(&out, 0);
+        assert_eq!(args, "{\"to\": \"juan@empresa.com\"}");
+        let parsed: Value = serde_json::from_str(&args).unwrap();
+        assert_eq!(parsed["to"], "juan@empresa.com");
+    }
+
+    #[test]
+    fn sse_keeps_json_array_brackets_in_arguments_intact() {
+        // A literal `[` from a JSON array in arguments must not be mistaken for a token
+        // nor corrupted, even when the array spans two argument fragments.
+        let (vault, _) = vault_with("juan@empresa.com", "email");
+        let mut r = SseRehydrator::new(vault);
+
+        let stream = format!(
+            "{}{}data: [DONE]\n\n",
+            args_delta(0, "{\"cc\": [\"[EMAIL_1"),
+            args_delta(0, "]\"]}"),
+        );
+        let out = run_sse(&mut r, &[stream.as_bytes()]);
+
+        let args = visible_args(&out, 0);
+        assert_eq!(args, "{\"cc\": [\"juan@empresa.com\"]}");
+        let parsed: Value = serde_json::from_str(&args).unwrap();
+        assert_eq!(parsed["cc"][0], "juan@empresa.com");
     }
 }

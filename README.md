@@ -6,8 +6,8 @@ data from your prompts before they ever leave your machine.
 
 > Status: work in progress. Regex detection, a policy engine (shadow/enforce),
 > multi-provider routing with model discovery, and **reversible pseudonymization with
-> response rehydration** (buffered and streaming) work today. Next: rehydrating
-> streamed tool-call argument deltas, and semantic (NER) detection. See
+> response rehydration** (buffered and streaming, including tool-call arguments) work
+> today. Next: semantic (NER) detection and native Anthropic support. See
 > [Roadmap](#roadmap).
 
 ![Sift demo](docs/demo.gif)
@@ -234,15 +234,20 @@ once, point your agent at it, and it protects every request automatically.
       buffered **and** streaming (tokens reassembled across delta/transport splits).
       Uses a per-request vault; a persistent session vault is only needed for
       stateful APIs and is deliberately out of the main path.
-- [ ] Phase 4: tool-call and tool-result handling (streamed tool-call **argument
-      deltas** are not rehydrated yet; the non-streaming path already covers them)
+- [x] Phase 4: tool-call and tool-result handling — tool-call `arguments` are
+      rehydrated in both buffered and streamed responses; tool-result content in the
+      request is scanned like any other field by the recursive redactor.
 - [ ] Phase 5: semantic detection (NER via ONNX)
+- [ ] Native Anthropic support (`/v1/messages`, not just `/v1/chat/completions`)
 
 ## Limitations
 
-- **Streamed tool-call argument deltas are not rehydrated yet**, so a token could reach
-  the agent inside a streamed tool call. Buffered (non-streaming) responses rehydrate
-  tool-call arguments fully. This closes in Phase 4.
+- **Rehydration is exact-match**, so if the model mangles a token (splits it oddly or
+  changes its case) it may not be restored. The `[TIPO_N]` format is chosen because
+  models tend to copy it verbatim.
+- **A pseudonymized value containing a JSON metacharacter** (e.g. a quote inside a
+  password) could break a streamed frame, since streamed rehydration is a text splice.
+  Emails, names and IPs are unaffected; a per-field-aware pass would remove this caveat.
 - **Images and other media pass through untouched.**
 - **Tool execution happens inside the agent**, so a tool that makes its own network
   request bypasses Sift. Sift only sees traffic to the model.
