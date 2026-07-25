@@ -206,6 +206,17 @@ Sift exposes an OpenAI-compatible `/v1` endpoint, so your agent talks to it exac
 as it would talk to the real API. Your provider key lives only in Sift's
 environment, never in the agent's config.
 
+### Provider signature passthrough
+
+Some providers attach opaque data to tool calls that must be echoed back on the next
+turn. Gemini 3 "thinking" models are the case in point: each function call carries a
+`thought_signature`, and the follow-up request is rejected (`400 "missing
+thought_signature"`) if it is not returned. Generic OpenAI-compatible clients drop that
+non-standard field, so tool-using conversations break. Because Sift sits in the middle
+and sees the response, it captures the opaque blob (keyed by tool-call id) and re-injects
+it into the matching tool call on the next request — making these models work through
+Sift's OpenAI-compatible surface without reimplementing each provider's native protocol.
+
 ## CLI
 
 | Command | What it does |
@@ -244,11 +255,13 @@ once, point your agent at it, and it protects every request automatically.
 ## Limitations
 
 - **OpenAI-compatible protocol only.** Sift speaks `/v1/chat/completions`, so it routes
-  every provider through its OpenAI-compatible surface. This breaks provider features
-  that live outside that schema — notably **Gemini 3 "thinking" models used with tools**,
-  which require a `thought_signature` on function calls that the OpenAI schema cannot
-  carry across turns (the native Gemini API handles it). Use OpenAI, Groq/Llama,
-  Anthropic, or non-thinking Gemini models until native provider adapters land.
+  every provider through its OpenAI-compatible surface. Most provider-specific behaviour
+  that lives outside that schema is therefore invisible to it. The main such case,
+  **Gemini 3 "thinking" models used with tools**, is handled specially: those models
+  attach an opaque `thought_signature` to each function call that must be echoed back, so
+  Sift captures it from the response and re-injects it on the next request (see *Provider
+  signature passthrough* above). Other native-only features would need per-provider
+  adapters.
 - **Rehydration is exact-match**, so if the model mangles a token (splits it oddly or
   changes its case) it may not be restored. The `[TIPO_N]` format is chosen because
   models tend to copy it verbatim.
