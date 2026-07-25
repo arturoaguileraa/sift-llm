@@ -416,3 +416,110 @@ fn redact_json_value(
     }
     audit_trail
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::policy::{Mode, PolicyConfig};
+    use serde_json::json;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    fn enforce_engine() -> PolicyEngine {
+        PolicyEngine::new(PolicyConfig {
+            mode: Mode::Enforce,
+            ..Default::default()
+        })
+    }
+
+    /// Exercises the whole request/response pipeline over a two-turn tool conversation:
+    /// pseudonymize outbound, rehydrate inbound (content + tool args), capture the
+    /// Gemini thought_signature, then on the next turn re-inject the signature and
+    /// re-tokenize the PII coherently. This is the composition the unit tests cover
+    /// piecewise.
+    #[test]
+    fn full_pipeline_two_turn_tool_conversation() {
+        let engine = enforce_engine();
+        let detector = RegexDetector::new();
+        let signatures: SignatureStore = Mutex::new(HashMap::new());
+
+        // --- Turn 1 request: user message carrying PII ---
+        let mut req1 = json!({
+            "model": "gemini-x",
+            "messages": [{ "role": "user", "content": "email juan@empresa.com about the weather" }]
+        });
+        let mut vault = Vault::new();
+        redact_json_value(&mut req1, &engine, &detector, &mut vault);
+        let sent = req1["messages"][0]["content"].as_str().unwrap();
+        assert!(
+            sent.contains("[EMAIL_1]"),
+            "PII should be tokenized outbound"
+        );
+        assert!(
+            !sent.contains("juan@empresa.com"),
+            "real PII must not leave"
+        );
+
+        // --- Turn 1 response: model echoes the token in content and tool-call args,
+        //     and attaches Gemini's opaque thought_signature ---
+        let mut resp1 = json!({
+            "choices": [{
+                "message": {
+                    "content": "I'll email [EMAIL_1].",
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "extra_content": { "google": { "thought_signature": "SIG==" } },
+                        "function": { "name": "send_email", "arguments": "{\"to\": \"[EMAIL_1]\"}" }
+                    }]
+                }
+            }]
+        });
+        signature::capture_response(&resp1, &signatures);
+        let mut revealed = Vec::new();
+        rehydrate_json_value(&mut resp1, &vault, &mut revealed);
+        assert_eq!(
+            resp1["choices"][0]["message"]["content"],
+            "I'll email juan@empresa.com."
+        );
+        assert_eq!(
+            resp1["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"],
+            "{\"to\": \"juan@empresa.com\"}"
+        );
+
+        // --- Turn 2 request: opencode resends the assistant tool_call WITHOUT the
+        //     signature, plus the tool result. Sift must re-tokenize and re-inject. ---
+        let mut req2 = json!({
+            "model": "gemini-x",
+            "messages": [
+                { "role": "user", "content": "email juan@empresa.com about the weather" },
+                { "role": "assistant", "tool_calls": [{
+                    "id": "call_1", "type": "function",
+                    "function": { "name": "send_email", "arguments": "{\"to\": \"juan@empresa.com\"}" }
+                }] },
+                { "role": "tool", "tool_call_id": "call_1", "content": "sent to juan@empresa.com" }
+            ]
+        });
+        let mut vault2 = Vault::new();
+        redact_json_value(&mut req2, &engine, &detector, &mut vault2);
+        signature::inject_request(&mut req2, &signatures);
+
+        // Signature re-injected onto the assistant tool_call by id.
+        assert_eq!(
+            req2["messages"][1]["tool_calls"][0]["extra_content"]["google"]["thought_signature"],
+            "SIG=="
+        );
+        // PII re-tokenized coherently in every message (same token throughout).
+        let whole = serde_json::to_string(&req2).unwrap();
+        assert!(
+            !whole.contains("juan@empresa.com"),
+            "no real PII in the forwarded request"
+        );
+        for path in [
+            &req2["messages"][0]["content"],
+            &req2["messages"][1]["tool_calls"][0]["function"]["arguments"],
+            &req2["messages"][2]["content"],
+        ] {
+            assert!(path.as_str().unwrap().contains("[EMAIL_1]"));
+        }
+    }
+}
