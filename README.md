@@ -1,5 +1,7 @@
 # Sift (sift-llm)
 
+[![CI](https://github.com/arturoaguileraa/sift-llm/actions/workflows/ci.yml/badge.svg)](https://github.com/arturoaguileraa/sift-llm/actions/workflows/ci.yml)
+
 **A local PII gateway for AI coding agents.** Sift sits between your agent (opencode,
 and any OpenAI/Anthropic-compatible tool) and the model API, and strips sensitive
 data from your prompts before they ever leave your machine.
