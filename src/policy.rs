@@ -1,4 +1,4 @@
-use crate::detect::RegexDetector;
+use crate::detect::Detector;
 use crate::vault::Vault;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -119,7 +119,7 @@ impl PolicyEngine {
     /// coherent across all messages in the payload.
     pub fn process_text(
         &self,
-        detector: &RegexDetector,
+        detector: &Detector,
         text: &str,
         vault: &mut Vault,
     ) -> (String, Vec<AuditRecord>) {
@@ -192,7 +192,7 @@ mod tests {
             mode: Mode::Shadow,
             ..Default::default()
         });
-        let detector = RegexDetector::new();
+        let detector = Detector::new();
         let mut vault = Vault::new();
         let input = "Email me at test@example.com";
         let (output, audit) = engine.process_text(&detector, input, &mut vault);
@@ -209,7 +209,7 @@ mod tests {
             allowlist: vec![],
             ..Default::default()
         });
-        let detector = RegexDetector::new();
+        let detector = Detector::new();
         let mut vault = Vault::new();
         let input = "Email me at user@secretcorp.com";
         let (output, audit) = engine.process_text(&detector, input, &mut vault);
@@ -230,7 +230,7 @@ mod tests {
             policies,
             allowlist: vec![],
         });
-        let detector = RegexDetector::new();
+        let detector = Detector::new();
         let mut vault = Vault::new();
         let input = "Email me at user@secretcorp.com";
         let (output, audit) = engine.process_text(&detector, input, &mut vault);

@@ -23,3 +23,5 @@ tower-http = { version = "0.5", features = ["cors", "trace"] }
 dialoguer = "0.11"
 daemonize = "0.5"
 zeroize = "1"
+gline-rs = "1"
+orp = "0.9"

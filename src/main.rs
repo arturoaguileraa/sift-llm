@@ -15,10 +15,42 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
 
-use detect::RegexDetector;
+use detect::{Detector, NerDetector};
 use policy::PolicyEngine;
 use provider::{discover_models, preset, Provider, ProviderRegistry};
 use proxy::run_proxy;
+
+/// Confidence below which NER matches are ignored. Start conservative; calibrate in
+/// shadow mode. (A future `thresholds.ner_confidence` in the policy file can override.)
+const NER_THRESHOLD: f32 = 0.5;
+
+/// Directory where the downloaded GLiNER model lives (~/.config/sift/models/gliner).
+fn model_dir() -> std::path::PathBuf {
+    sift_dir().join("models").join("gliner")
+}
+
+/// Builds the detector: regex always, plus semantic NER if the model is present.
+/// Missing/broken model degrades to regex-only with a hint, never a hard failure.
+fn build_detector() -> Detector {
+    let detector = Detector::new();
+    match NerDetector::load(&model_dir(), NER_THRESHOLD) {
+        Ok(ner) => {
+            println!(
+                "{} semantic NER enabled (names, orgs, locations)",
+                "✓".green().bold()
+            );
+            detector.with_ner(ner)
+        }
+        Err(e) => {
+            println!(
+                "{} NER off ({}). Structured PII (emails, keys) still detected.",
+                "Note:".yellow().bold(),
+                e
+            );
+            detector
+        }
+    }
+}
 
 #[derive(Parser)]
 #[command(name = "sift")]
@@ -75,6 +107,11 @@ enum Commands {
     },
     /// Stop a background Sift gateway started with --daemon
     Stop,
+    /// Manage the local semantic NER model
+    Model {
+        #[command(subcommand)]
+        subcommand: ModelCommands,
+    },
     /// Remove Sift's config, OpenCode provider entry, PATH block and binary
     Uninstall {
         /// Skip the confirmation prompt
@@ -84,6 +121,12 @@ enum Commands {
         #[arg(long)]
         keep_binary: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum ModelCommands {
+    /// Download the GLiNER model for semantic PII detection (names, orgs, locations)
+    Pull,
 }
 
 #[derive(Subcommand)]
@@ -158,14 +201,15 @@ async fn run(cli: Cli) {
                     "sift status".cyan()
                 );
             }
-            if let Err(e) = run_proxy(port, policy_engine).await {
+            let detector = build_detector();
+            if let Err(e) = run_proxy(port, policy_engine, detector).await {
                 eprintln!("{}: {}", "Error starting proxy".red().bold(), e);
                 std::process::exit(1);
             }
         }
         Commands::Scan { file, config } => {
             let policy_engine = PolicyEngine::load_or_default(&config);
-            let detector = RegexDetector::new();
+            let detector = build_detector();
             let file_path = Path::new(&file);
 
             if !file_path.exists() {
@@ -332,8 +376,66 @@ async fn run(cli: Cli) {
             }
         },
         Commands::Stop => stop_daemon(true),
+        Commands::Model { subcommand } => match subcommand {
+            ModelCommands::Pull => model_pull().await,
+        },
         Commands::Uninstall { yes, keep_binary } => uninstall(yes, keep_binary),
     }
+}
+
+/// Downloads the GLiNER NER model (int8 ONNX + tokenizer) into ~/.config/sift/models/
+/// gliner. Uses the gline-rs-compatible `onnx-community/gliner_small-v2.1` export.
+async fn model_pull() {
+    const BASE: &str = "https://huggingface.co/onnx-community/gliner_small-v2.1/resolve/main";
+    let files = [
+        ("onnx/model_int8.onnx", "model.onnx"),
+        ("tokenizer.json", "tokenizer.json"),
+    ];
+    let dir = model_dir();
+    if let Err(e) = fs::create_dir_all(&dir) {
+        eprintln!(
+            "{}: cannot create {}: {}",
+            "Error".red().bold(),
+            dir.display(),
+            e
+        );
+        std::process::exit(1);
+    }
+    let client = reqwest::Client::new();
+    for (remote, local) in files {
+        let url = format!("{BASE}/{remote}");
+        print!("{} downloading {} ... ", "==>".blue().bold(), local);
+        io::stdout().flush().ok();
+        let bytes = match client
+            .get(&url)
+            .send()
+            .await
+            .and_then(|r| r.error_for_status())
+        {
+            Ok(resp) => match resp.bytes().await {
+                Ok(b) => b,
+                Err(e) => {
+                    println!("{}", format!("failed ({e})").red());
+                    std::process::exit(1);
+                }
+            },
+            Err(e) => {
+                println!("{}", format!("failed ({e})").red());
+                std::process::exit(1);
+            }
+        };
+        if let Err(e) = fs::write(dir.join(local), &bytes) {
+            println!("{}", format!("write failed ({e})").red());
+            std::process::exit(1);
+        }
+        println!("{}", format!("{:.1} MB", bytes.len() as f64 / 1e6).green());
+    }
+    println!(
+        "{} model ready in {}. Restart {} to enable semantic detection.",
+        "✓".green().bold(),
+        dir.display(),
+        "sift serve".cyan()
+    );
 }
 
 /// Stops a background gateway using the pid file. When `verbose`, reports outcome.

@@ -15,7 +15,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
 use crate::audit::log_audit;
-use crate::detect::RegexDetector;
+use crate::detect::Detector;
 use crate::policy::{Action, AuditRecord, PolicyEngine};
 use crate::provider::ProviderRegistry;
 use crate::rehydrate::{log_reveals, rehydrate_json_value, SseRehydrator};
@@ -25,7 +25,7 @@ use crate::vault::Vault;
 #[derive(Clone)]
 pub struct AppState {
     pub policy_engine: Arc<PolicyEngine>,
-    pub detector: Arc<RegexDetector>,
+    pub detector: Arc<Detector>,
     pub provider_registry: Arc<ProviderRegistry>,
     pub client: Client,
     /// Provider opaque data (e.g. Gemini's thought_signature) captured from responses
@@ -36,10 +36,11 @@ pub struct AppState {
 pub async fn run_proxy(
     port: u16,
     policy_engine: PolicyEngine,
+    detector: Detector,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let state = AppState {
         policy_engine: Arc::new(policy_engine),
-        detector: Arc::new(RegexDetector::new()),
+        detector: Arc::new(detector),
         provider_registry: Arc::new(ProviderRegistry::new()),
         client: Client::new(),
         signatures: Arc::new(Mutex::new(HashMap::new())),
@@ -389,7 +390,7 @@ async fn handle_chat_completions(
 fn redact_json_value(
     value: &mut Value,
     engine: &PolicyEngine,
-    detector: &RegexDetector,
+    detector: &Detector,
     vault: &mut Vault,
 ) -> Vec<AuditRecord> {
     let mut audit_trail = Vec::new();
@@ -440,7 +441,7 @@ mod tests {
     #[test]
     fn full_pipeline_two_turn_tool_conversation() {
         let engine = enforce_engine();
-        let detector = RegexDetector::new();
+        let detector = Detector::new();
         let signatures: SignatureStore = Mutex::new(HashMap::new());
 
         // --- Turn 1 request: user message carrying PII ---
