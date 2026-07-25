@@ -58,7 +58,8 @@ and where a small local model fits, read [**Why Sift-LLM**](docs/why-sift-llm.md
 
 ### Binary (recommended)
 
-Install the pre-compiled binary for macOS or Linux with a single command:
+Install the pre-compiled binary for macOS (Apple Silicon) or Linux (x86_64 / arm64) with
+a single command. On Intel macOS, build from source instead (`cargo install --path .`).
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/arturoaguileraa/sift-llm/main/install.sh | bash

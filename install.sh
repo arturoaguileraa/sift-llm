@@ -80,6 +80,13 @@ esac
 
 TARGET="${TARGET_ARCH}-${TARGET_OS}"
 
+# Intel macOS is not shipped as a prebuilt binary (Apple Silicon only). Fail with a
+# clear message instead of a confusing 404 on the download.
+if [ "$TARGET" = "x86_64-apple-darwin" ]; then
+  log_error "Intel macOS has no prebuilt binary. Build from source with: cargo install --path ."
+  exit 1
+fi
+
 # Determine installation directory
 if [ -n "${SIFT_INSTALL_DIR:-}" ]; then
   INSTALL_DIR="$SIFT_INSTALL_DIR"
