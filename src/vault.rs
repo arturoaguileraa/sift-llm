@@ -62,17 +62,11 @@ impl Vault {
         self.reverse.is_empty()
     }
 
-    /// Replaces every complete token in `text` with its original value. Tokens
-    /// this vault never minted are left untouched, so it is safe to run over any
-    /// text. Used directly for buffered (non-streaming) responses and as the core
-    /// primitive of the streaming rehydrator.
-    pub fn rehydrate(&self, text: &str) -> String {
-        self.rehydrate_tracked(text, &mut Vec::new())
-    }
-
-    /// Like [`rehydrate`](Self::rehydrate), but records into `revealed` the name of
-    /// each token it restored (with repetitions), so callers can log the inbound
-    /// side of the exchange.
+    /// Replaces every complete token in `text` with its original value, recording into
+    /// `revealed` the name of each token it restored (with repetitions) so callers can
+    /// log the inbound side of the exchange. Tokens this vault never minted are left
+    /// untouched, so it is safe to run over any text. This is the core primitive for
+    /// both buffered responses and the streaming rehydrator.
     pub fn rehydrate_tracked(&self, text: &str, revealed: &mut Vec<String>) -> String {
         if self.reverse.is_empty() || !text.contains('[') {
             return text.to_string();
@@ -122,7 +116,7 @@ mod tests {
         let token = vault.tokenize("juan@empresa.com", "email");
         let text = format!("Reply to {token} and cc [EMAIL_9] please");
         assert_eq!(
-            vault.rehydrate(&text),
+            vault.rehydrate_tracked(&text, &mut Vec::new()),
             "Reply to juan@empresa.com and cc [EMAIL_9] please"
         );
     }
@@ -130,6 +124,9 @@ mod tests {
     #[test]
     fn rehydrate_is_a_noop_without_tokens() {
         let vault = Vault::new();
-        assert_eq!(vault.rehydrate("nothing to do here"), "nothing to do here");
+        assert_eq!(
+            vault.rehydrate_tracked("nothing to do here", &mut Vec::new()),
+            "nothing to do here"
+        );
     }
 }
