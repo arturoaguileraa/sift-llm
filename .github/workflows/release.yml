@@ -38,22 +38,23 @@ jobs:
     name: Build & Upload Release Binaries
     needs: create-release
     runs-on: ${{ matrix.os }}
+    # Every target now builds natively (no cross/QEMU), so a job should take minutes.
+    # Cap it so a hung build fails fast instead of blocking the release for hours.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         include:
           - target: aarch64-apple-darwin
             os: macos-latest
-            use_cross: false
           - target: x86_64-apple-darwin
             os: macos-13
-            use_cross: false
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            use_cross: false
+          # Native ARM64 Linux runner (GA, free for public repos): no `cross`, no
+          # QEMU — this replaces the cross-compile job that used to hang for ~24h.
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-            use_cross: true
+            os: ubuntu-24.04-arm
 
     steps:
       - name: Checkout repository
@@ -64,19 +65,8 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install cross (if cross-compiling)
-        if: ${{ matrix.use_cross }}
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cross
-
       - name: Build binary
-        run: |
-          if [ "${{ matrix.use_cross }}" = "true" ]; then
-            cross build --release --target ${{ matrix.target }}
-          else
-            cargo build --release --target ${{ matrix.target }}
-          fi
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Package archive
         shell: bash
