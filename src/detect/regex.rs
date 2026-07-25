@@ -1,5 +1,5 @@
-use regex::Regex;
 use once_cell::sync::Lazy;
+use regex::Regex;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DetectionMatch {
@@ -21,7 +21,9 @@ static PATTERNS: Lazy<Vec<PatternDefinition>> = Lazy::new(|| {
         // Secrets & Credentials
         PatternDefinition {
             category: "private_key",
-            regex: Lazy::new(|| Regex::new(r"-----BEGIN\s+(?:RSA|EC|DSA|OPENSSH|PRIVATE)\s+KEY-----[\s\S]+?-----END\s+(?:RSA|EC|DSA|OPENSSH|PRIVATE)\s+KEY-----").unwrap()),
+            regex: Lazy::new(|| {
+                Regex::new(r"-----BEGIN\s+(?:RSA|EC|DSA|OPENSSH|PRIVATE)\s+KEY-----[\s\S]+?-----END\s+(?:RSA|EC|DSA|OPENSSH|PRIVATE)\s+KEY-----").unwrap()
+            }),
             redaction_tag: "[PRIVATE_KEY_REDACTED]",
         },
         PatternDefinition {
@@ -41,7 +43,9 @@ static PATTERNS: Lazy<Vec<PatternDefinition>> = Lazy::new(|| {
         },
         PatternDefinition {
             category: "api_key",
-            regex: Lazy::new(|| Regex::new(r"\bghp_[a-zA-Z0-9]{36}\b|\bgithub_pat_[a-zA-Z0-9_]{82}\b").unwrap()),
+            regex: Lazy::new(|| {
+                Regex::new(r"\bghp_[a-zA-Z0-9]{36}\b|\bgithub_pat_[a-zA-Z0-9_]{82}\b").unwrap()
+            }),
             redaction_tag: "[GITHUB_TOKEN_REDACTED]",
         },
         PatternDefinition {
@@ -60,29 +64,38 @@ static PATTERNS: Lazy<Vec<PatternDefinition>> = Lazy::new(|| {
             // like "...prod." is not captured with the period — otherwise the same
             // connection string written twice (with and without a trailing period)
             // would be treated as two different secrets and break token coherence.
-            regex: Lazy::new(|| Regex::new(r#"(?i)\b(?:postgres|postgresql|mysql|mongodb|redis)://[^\s"']*[^\s"'.,;:!?)\]}>]"#).unwrap()),
+            regex: Lazy::new(|| {
+                Regex::new(r#"(?i)\b(?:postgres|postgresql|mysql|mongodb|redis)://[^\s"']*[^\s"'.,;:!?)\]}>]"#).unwrap()
+            }),
             redaction_tag: "[CONNECTION_STRING_REDACTED]",
         },
         PatternDefinition {
             category: "password",
-            regex: Lazy::new(|| Regex::new(r#"(?i)"(?:password|passwd|pwd|secret)"\s*:\s*"([^"]+)""#).unwrap()),
+            regex: Lazy::new(|| {
+                Regex::new(r#"(?i)"(?:password|passwd|pwd|secret)"\s*:\s*"([^"]+)""#).unwrap()
+            }),
             redaction_tag: "[PASSWORD_REDACTED]",
         },
-
         // Personal Identifiable Information (PII)
         PatternDefinition {
             category: "email",
-            regex: Lazy::new(|| Regex::new(r"\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b").unwrap()),
+            regex: Lazy::new(|| {
+                Regex::new(r"\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b").unwrap()
+            }),
             redaction_tag: "[EMAIL_REDACTED]",
         },
         PatternDefinition {
             category: "credit_card",
-            regex: Lazy::new(|| Regex::new(r"\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|6(?:011|5[0-9]{2})[0-9]{12})\b").unwrap()),
+            regex: Lazy::new(|| {
+                Regex::new(r"\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|6(?:011|5[0-9]{2})[0-9]{12})\b").unwrap()
+            }),
             redaction_tag: "[CREDIT_CARD_REDACTED]",
         },
         PatternDefinition {
             category: "ip_address",
-            regex: Lazy::new(|| Regex::new(r"\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b").unwrap()),
+            regex: Lazy::new(|| {
+                Regex::new(r"\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b").unwrap()
+            }),
             redaction_tag: "[IP_REDACTED]",
         },
     ]

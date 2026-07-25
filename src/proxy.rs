@@ -1,26 +1,26 @@
 use axum::{
     body::Body,
-    extract::{State, Request},
+    extract::{Request, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
     Router,
 };
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::net::SocketAddr;
+use colored::Colorize;
 use futures_util::stream::StreamExt;
 use reqwest::Client;
 use serde_json::Value;
-use colored::Colorize;
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
 
-use crate::detect::RegexDetector;
-use crate::policy::{PolicyEngine, AuditRecord, Action};
-use crate::provider::ProviderRegistry;
 use crate::audit::log_audit;
-use crate::vault::Vault;
+use crate::detect::RegexDetector;
+use crate::policy::{Action, AuditRecord, PolicyEngine};
+use crate::provider::ProviderRegistry;
 use crate::rehydrate::{log_reveals, rehydrate_json_value, SseRehydrator};
 use crate::signature::{self, SignatureStore};
+use crate::vault::Vault;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -33,7 +33,10 @@ pub struct AppState {
     pub signatures: Arc<SignatureStore>,
 }
 
-pub async fn run_proxy(port: u16, policy_engine: PolicyEngine) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run_proxy(
+    port: u16,
+    policy_engine: PolicyEngine,
+) -> Result<(), Box<dyn std::error::Error>> {
     let state = AppState {
         policy_engine: Arc::new(policy_engine),
         detector: Arc::new(RegexDetector::new()),
@@ -110,7 +113,11 @@ async fn handle_models(State(state): State<AppState>) -> impl IntoResponse {
         "data": data,
     });
 
-    (StatusCode::OK, [(header::CONTENT_TYPE, "application/json")], serde_json::to_string(&body).unwrap())
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json")],
+        serde_json::to_string(&body).unwrap(),
+    )
 }
 
 async fn handle_chat_completions(
@@ -122,45 +129,69 @@ async fn handle_chat_completions(
     let body_bytes = match axum::body::to_bytes(request.into_body(), 1024 * 1024 * 10).await {
         Ok(bytes) => bytes,
         Err(e) => {
-            return (StatusCode::BAD_REQUEST, format!("Failed to read request body: {}", e)).into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("Failed to read request body: {}", e),
+            )
+                .into_response();
         }
     };
 
     let mut payload: Value = match serde_json::from_slice(&body_bytes) {
         Ok(json) => json,
         Err(e) => {
-            return (StatusCode::BAD_REQUEST, format!("Invalid JSON payload: {}", e)).into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("Invalid JSON payload: {}", e),
+            )
+                .into_response();
         }
     };
 
     // 2. Identify target provider and API key
     let mut model_name = payload["model"].as_str().unwrap_or("").to_string();
-    
+
     // Strip Sift suffix if present
     if let Some(idx) = model_name.find(" (Secured by SiftLLM)") {
         model_name = model_name[..idx].to_string();
     } else if let Some(idx) = model_name.find(" (PII secured by Sift)") {
         model_name = model_name[..idx].to_string();
     }
-    
+
     // Find provider from registry based on model name
-    let provider = state.provider_registry.providers.iter().find(|p| {
-        p.models.contains(&model_name)
-            || p.models.contains(&format!("models/{}", model_name))
-            || model_name.starts_with(&p.name)
-            || (p.name == "google" && (model_name.starts_with("gemini") || model_name.starts_with("google")))
-            || (p.name == "gemini" && (model_name.starts_with("gemini") || model_name.starts_with("google")))
-            || (p.name == "anthropic" && (model_name.starts_with("claude") || model_name.starts_with("anthropic")))
-            || (p.name == "openai" && (model_name.starts_with("gpt") || model_name.starts_with("o1") || model_name.starts_with("o3") || model_name.starts_with("text-")))
-    }).or_else(|| {
-        // Fallback to first provider (usually Anthropic or OpenAI)
-        state.provider_registry.providers.first()
-    });
+    let provider = state
+        .provider_registry
+        .providers
+        .iter()
+        .find(|p| {
+            p.models.contains(&model_name)
+                || p.models.contains(&format!("models/{}", model_name))
+                || model_name.starts_with(&p.name)
+                || (p.name == "google"
+                    && (model_name.starts_with("gemini") || model_name.starts_with("google")))
+                || (p.name == "gemini"
+                    && (model_name.starts_with("gemini") || model_name.starts_with("google")))
+                || (p.name == "anthropic"
+                    && (model_name.starts_with("claude") || model_name.starts_with("anthropic")))
+                || (p.name == "openai"
+                    && (model_name.starts_with("gpt")
+                        || model_name.starts_with("o1")
+                        || model_name.starts_with("o3")
+                        || model_name.starts_with("text-")))
+        })
+        .or_else(|| {
+            // Fallback to first provider (usually Anthropic or OpenAI)
+            state.provider_registry.providers.first()
+        });
 
     let provider = match provider {
         Some(p) => p,
         None => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, "No upstream providers configured").into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "No upstream providers configured",
+            )
+                .into_response();
         }
     };
 
@@ -170,7 +201,7 @@ async fn handle_chat_completions(
     } else {
         model_name.clone()
     };
-    
+
     payload["model"] = serde_json::Value::String(final_model);
 
     // Local providers (e.g. Ollama) need no key. Only error when the provider
@@ -191,12 +222,17 @@ async fn handle_chat_completions(
     // the harness only ever sees real values, so a request-scoped vault is enough —
     // no session store needed for correctness.
     let mut vault = Vault::new();
-    let audit_trail = redact_json_value(&mut payload, &state.policy_engine, &state.detector, &mut vault);
+    let audit_trail = redact_json_value(
+        &mut payload,
+        &state.policy_engine,
+        &state.detector,
+        &mut vault,
+    );
 
     // Check if any block action was triggered in Enforce mode
-    let contains_block = audit_trail.iter().any(|rec| {
-        rec.action_taken == Action::Block && rec.mode == crate::policy::Mode::Enforce
-    });
+    let contains_block = audit_trail
+        .iter()
+        .any(|rec| rec.action_taken == Action::Block && rec.mode == crate::policy::Mode::Enforce);
 
     if contains_block {
         let block_reason = audit_trail
@@ -205,7 +241,11 @@ async fn handle_chat_completions(
             .map(|rec| format!("Blocked sensitive category: {}", rec.category))
             .collect::<Vec<String>>()
             .join(", ");
-        return (StatusCode::BAD_REQUEST, format!("Request blocked by Sift: {}", block_reason)).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            format!("Request blocked by Sift: {}", block_reason),
+        )
+            .into_response();
     }
 
     // Log detections to console
@@ -220,10 +260,12 @@ async fn handle_chat_completions(
 
     // 4. Forward to upstream LLM API
     let upstream_url = format!("{}/chat/completions", provider.base_url);
-    
+
     let is_stream = payload["stream"].as_bool().unwrap_or(false);
 
-    let mut req_builder = state.client.post(&upstream_url)
+    let mut req_builder = state
+        .client
+        .post(&upstream_url)
         .header(header::CONTENT_TYPE, "application/json");
     if let Some(key) = &api_key {
         req_builder = req_builder.header(header::AUTHORIZATION, format!("Bearer {}", key));
@@ -242,11 +284,16 @@ async fn handle_chat_completions(
     let upstream_res = match req_builder.json(&payload).send().await {
         Ok(res) => res,
         Err(e) => {
-            return (StatusCode::BAD_GATEWAY, format!("Upstream request failed: {}", e)).into_response();
+            return (
+                StatusCode::BAD_GATEWAY,
+                format!("Upstream request failed: {}", e),
+            )
+                .into_response();
         }
     };
 
-    let status = StatusCode::from_u16(upstream_res.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let status =
+        StatusCode::from_u16(upstream_res.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
 
     if is_stream {
         // Always feed the stream through the SSE-aware rehydrator: even with no PII it
@@ -265,10 +312,13 @@ async fn handle_chat_completions(
                 match upstream.next().await {
                     Some(Ok(chunk)) => {
                         let out = rehydrator.push(&chunk);
-                        Some((Ok::<Vec<u8>, std::io::Error>(out), (upstream, rehydrator, false)))
+                        Some((
+                            Ok::<Vec<u8>, std::io::Error>(out),
+                            (upstream, rehydrator, false),
+                        ))
                     }
                     Some(Err(e)) => {
-                        let err = std::io::Error::new(std::io::ErrorKind::Other, e);
+                        let err = std::io::Error::other(e);
                         Some((Err(err), (upstream, rehydrator, true)))
                     }
                     None => {
@@ -295,7 +345,11 @@ async fn handle_chat_completions(
         let body_content = match upstream_res.bytes().await {
             Ok(b) => b,
             Err(e) => {
-                return (StatusCode::BAD_GATEWAY, format!("Failed to read upstream response: {}", e)).into_response();
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    format!("Failed to read upstream response: {}", e),
+                )
+                    .into_response();
             }
         };
 

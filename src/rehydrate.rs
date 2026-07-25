@@ -198,7 +198,10 @@ impl SseRehydrator {
         let mut modified = false;
 
         // 1. Text content delta.
-        if let Some(content) = json["choices"][0]["delta"]["content"].as_str().map(str::to_string) {
+        if let Some(content) = json["choices"][0]["delta"]["content"]
+            .as_str()
+            .map(str::to_string)
+        {
             let emit = Self::slide(&self.vault, &mut self.pending, &content);
             json["choices"][0]["delta"]["content"] = Value::String(emit);
             modified = true;
@@ -446,7 +449,11 @@ mod tests {
         let (vault, _) = vault_with("juan@empresa.com", "email");
         let mut r = SseRehydrator::new(vault, store());
 
-        let full = format!("{}{}data: [DONE]\n\n", delta("hi [EMAIL"), delta("_1] there"));
+        let full = format!(
+            "{}{}data: [DONE]\n\n",
+            delta("hi [EMAIL"),
+            delta("_1] there")
+        );
         let bytes = full.as_bytes();
         let mid = bytes.len() / 3;
         let out = run_sse(&mut r, &[&bytes[..mid], &bytes[mid..]]);
@@ -525,9 +532,6 @@ mod tests {
         let _ = run_sse(&mut r, &[stream.as_bytes()]);
 
         let captured = sigs.lock().unwrap();
-        assert_eq!(
-            captured["call_xyz"]["google"]["thought_signature"],
-            "SIG=="
-        );
+        assert_eq!(captured["call_xyz"]["google"]["thought_signature"], "SIG==");
     }
 }

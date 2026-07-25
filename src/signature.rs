@@ -121,7 +121,11 @@ mod tests {
     #[test]
     fn inject_leaves_unknown_ids_and_present_content_alone() {
         let store: SignatureStore = Mutex::new(HashMap::new());
-        remember(&store, "known", &json!({ "google": { "thought_signature": "S" } }));
+        remember(
+            &store,
+            "known",
+            &json!({ "google": { "thought_signature": "S" } }),
+        );
 
         let mut request = json!({
             "messages": [{

@@ -85,7 +85,8 @@ pub fn sync_opencode(path: Option<&str>) -> Result<(usize, PathBuf), String> {
     sift.entry("name").or_insert_with(|| json!("Sift LLM"));
     let options = sift.entry("options").or_insert_with(|| json!({}));
     if let Some(opts) = options.as_object_mut() {
-        opts.entry("baseURL").or_insert_with(|| json!(GATEWAY_BASE_URL));
+        opts.entry("baseURL")
+            .or_insert_with(|| json!(GATEWAY_BASE_URL));
     }
     // Only the models block is authoritative from Sift.
     sift.insert("models".to_string(), Value::Object(models));

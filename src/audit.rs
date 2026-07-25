@@ -1,4 +1,4 @@
-use crate::policy::{AuditRecord, Action, Mode};
+use crate::policy::{Action, AuditRecord, Mode};
 use colored::Colorize;
 
 /// Truncates a value for display so secrets/PII never fully hit the logs.

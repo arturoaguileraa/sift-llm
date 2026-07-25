@@ -1,25 +1,22 @@
+use crate::detect::RegexDetector;
+use crate::vault::Vault;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use crate::detect::RegexDetector;
-use crate::vault::Vault;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum Mode {
+    #[default]
     Shadow,
     Enforce,
 }
 
-impl Default for Mode {
-    fn default() -> Self {
-        Mode::Shadow
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum Action {
     /// Leave the value untouched (functional data you want the model to see).
     Pass,
@@ -28,16 +25,11 @@ pub enum Action {
     Redact,
     /// Reversible replacement with a coherent token (`[EMAIL_1]`) recorded in the
     /// vault, then restored in the response. The primary action.
+    #[default]
     Pseudonymize,
     /// Reject the whole request before it reaches the LLM (see the proxy's block
     /// handling: enforce mode returns a 400).
     Block,
-}
-
-impl Default for Action {
-    fn default() -> Self {
-        Action::Pseudonymize
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -106,7 +98,10 @@ impl PolicyEngine {
     }
 
     pub fn is_allowed(&self, value: &str) -> bool {
-        self.config.allowlist.iter().any(|item| value.contains(item))
+        self.config
+            .allowlist
+            .iter()
+            .any(|item| value.contains(item))
     }
 
     pub fn get_action(&self, category: &str) -> Action {

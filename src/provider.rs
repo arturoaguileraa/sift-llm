@@ -70,20 +70,9 @@ pub async fn discover_models(base_url: &str, api_key: Option<&str>) -> Result<Ve
     Ok(models)
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ProviderRegistry {
     pub providers: Vec<Provider>,
-}
-
-impl Default for ProviderRegistry {
-    fn default() -> Self {
-        // The registry starts empty on purpose: only providers the user adds via
-        // `sift provider add` are registered and exposed. Nothing is seeded, so
-        // `sift models` / /v1/models list exactly the providers you configured.
-        Self {
-            providers: Vec::new(),
-        }
-    }
 }
 
 impl ProviderRegistry {
@@ -123,8 +112,7 @@ impl ProviderRegistry {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let json = serde_json::to_string_pretty(self)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
         fs::write(path, json)
     }
 

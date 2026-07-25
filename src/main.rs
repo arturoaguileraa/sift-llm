@@ -1,19 +1,19 @@
+mod audit;
 mod detect;
+mod opencode;
 mod policy;
 mod provider;
-mod audit;
 mod proxy;
-mod opencode;
-mod vault;
 mod rehydrate;
 mod signature;
+mod vault;
 
 use clap::{Parser, Subcommand};
+use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Confirm, Input, Select};
 use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
-use colored::Colorize;
 
 use detect::RegexDetector;
 use policy::PolicyEngine;
@@ -113,7 +113,10 @@ fn main() {
 
     // Daemonize before the async runtime starts: the fork must happen while the
     // process is still single-threaded (tokio threads don't survive a fork).
-    if let Commands::Serve { daemon: true, port, .. } = &cli.command {
+    if let Commands::Serve {
+        daemon: true, port, ..
+    } = &cli.command
+    {
         ensure_port_free(*port);
         daemonize_background();
     }
@@ -124,7 +127,11 @@ fn main() {
 
 async fn run(cli: Cli) {
     match cli.command {
-        Commands::Serve { config, port, daemon } => {
+        Commands::Serve {
+            config,
+            port,
+            daemon,
+        } => {
             let policy_path = Path::new(&config);
             let policy_engine = if policy_path.exists() {
                 PolicyEngine::load_or_default(&config)
@@ -180,7 +187,7 @@ async fn run(cli: Cli) {
                 file,
                 config
             );
-            
+
             // Scan is a one-shot diagnostic: the vault is throwaway here, we only
             // want to preview what the gateway would send upstream.
             let mut vault = vault::Vault::new();
@@ -192,7 +199,9 @@ async fn run(cli: Cli) {
             } else {
                 println!(
                     "{}",
-                    format!("Found {} matches:", audit_trail.len()).yellow().bold()
+                    format!("Found {} matches:", audit_trail.len())
+                        .yellow()
+                        .bold()
                 );
                 for record in &audit_trail {
                     crate::audit::log_audit(record);
@@ -202,43 +211,63 @@ async fn run(cli: Cli) {
                 println!("{}", "-------------------------------".cyan().bold());
             }
         }
-        Commands::Provider { subcommand } => {
-            match subcommand {
-                Some(ProviderCommands::Add { name, url, key_env, api_key }) => {
-                    provider_add(name, url, key_env, api_key).await;
-                }
-                Some(ProviderCommands::Remove { name }) => {
-                    let mut registry = ProviderRegistry::load();
-                    if registry.remove(&name) {
-                        match registry.save() {
-                            Ok(()) => {
-                                println!("{} removed provider '{}'", "✓".green().bold(), name.green().bold());
-                                auto_sync_opencode();
-                            }
-                            Err(e) => eprintln!("{}: failed to save providers: {}", "Error".red().bold(), e),
+        Commands::Provider { subcommand } => match subcommand {
+            Some(ProviderCommands::Add {
+                name,
+                url,
+                key_env,
+                api_key,
+            }) => {
+                provider_add(name, url, key_env, api_key).await;
+            }
+            Some(ProviderCommands::Remove { name }) => {
+                let mut registry = ProviderRegistry::load();
+                if registry.remove(&name) {
+                    match registry.save() {
+                        Ok(()) => {
+                            println!(
+                                "{} removed provider '{}'",
+                                "✓".green().bold(),
+                                name.green().bold()
+                            );
+                            auto_sync_opencode();
                         }
-                    } else {
-                        eprintln!("{}: no provider named '{}'", "Warning:".yellow().bold(), name);
+                        Err(e) => {
+                            eprintln!("{}: failed to save providers: {}", "Error".red().bold(), e)
+                        }
                     }
-                }
-                Some(ProviderCommands::List) | None => {
-                    let registry = ProviderRegistry::new();
-                    println!("{}", "Registered Upstream Providers:".blue().bold());
-                    if registry.providers.is_empty() {
-                        println!("  (none yet — add one with: {})", "sift provider add".cyan());
-                    }
-                    for p in &registry.providers {
-                        println!(
-                            "  - {} (URL: {}, Key Env: {}, {} models)",
-                            p.name.green().bold(),
-                            p.base_url,
-                            if p.key_env.is_empty() { "-" } else { &p.key_env },
-                            p.models.len()
-                        );
-                    }
+                } else {
+                    eprintln!(
+                        "{}: no provider named '{}'",
+                        "Warning:".yellow().bold(),
+                        name
+                    );
                 }
             }
-        }
+            Some(ProviderCommands::List) | None => {
+                let registry = ProviderRegistry::new();
+                println!("{}", "Registered Upstream Providers:".blue().bold());
+                if registry.providers.is_empty() {
+                    println!(
+                        "  (none yet — add one with: {})",
+                        "sift provider add".cyan()
+                    );
+                }
+                for p in &registry.providers {
+                    println!(
+                        "  - {} (URL: {}, Key Env: {}, {} models)",
+                        p.name.green().bold(),
+                        p.base_url,
+                        if p.key_env.is_empty() {
+                            "-"
+                        } else {
+                            &p.key_env
+                        },
+                        p.models.len()
+                    );
+                }
+            }
+        },
         Commands::Models => {
             let registry = ProviderRegistry::new();
             println!("{}", "Exposed models (Sift protected):".blue().bold());
@@ -287,23 +316,21 @@ async fn run(cli: Cli) {
                 }
             }
         }
-        Commands::SyncOpencode { path } => {
-            match opencode::sync_opencode(path.as_deref()) {
-                Ok((n, p)) => {
-                    println!(
-                        "{} wrote {} models to {}",
-                        "✓".green().bold(),
-                        n,
-                        p.display()
-                    );
-                    println!("  Restart opencode to see them under the 'Sift LLM' provider.");
-                }
-                Err(e) => {
-                    eprintln!("{}: {}", "Error".red().bold(), e);
-                    std::process::exit(1);
-                }
+        Commands::SyncOpencode { path } => match opencode::sync_opencode(path.as_deref()) {
+            Ok((n, p)) => {
+                println!(
+                    "{} wrote {} models to {}",
+                    "✓".green().bold(),
+                    n,
+                    p.display()
+                );
+                println!("  Restart opencode to see them under the 'Sift LLM' provider.");
             }
-        }
+            Err(e) => {
+                eprintln!("{}: {}", "Error".red().bold(), e);
+                std::process::exit(1);
+            }
+        },
         Commands::Stop => stop_daemon(true),
         Commands::Uninstall { yes, keep_binary } => uninstall(yes, keep_binary),
     }
@@ -376,15 +403,27 @@ fn uninstall(yes: bool, keep_binary: bool) {
     stop_daemon(false);
 
     match opencode::remove_from_opencode(None) {
-        Ok(true) => println!("{} removed 'sift-llm' from OpenCode config", "✓".green().bold()),
+        Ok(true) => println!(
+            "{} removed 'sift-llm' from OpenCode config",
+            "✓".green().bold()
+        ),
         Ok(false) => {}
-        Err(e) => eprintln!("{} could not update OpenCode config: {}", "Note:".yellow().bold(), e),
+        Err(e) => eprintln!(
+            "{} could not update OpenCode config: {}",
+            "Note:".yellow().bold(),
+            e
+        ),
     }
 
     if dir.exists() {
         match std::fs::remove_dir_all(&dir) {
             Ok(()) => println!("{} removed {}", "✓".green().bold(), dir.display()),
-            Err(e) => eprintln!("{} could not remove {}: {}", "Note:".yellow().bold(), dir.display(), e),
+            Err(e) => eprintln!(
+                "{} could not remove {}: {}",
+                "Note:".yellow().bold(),
+                dir.display(),
+                e
+            ),
         }
     }
 
@@ -395,7 +434,12 @@ fn uninstall(yes: bool, keep_binary: bool) {
             match std::fs::remove_file(&p) {
                 Ok(()) => println!("{} removed binary {}", "✓".green().bold(), p.display()),
                 Err(e) => {
-                    eprintln!("{} could not remove binary {}: {}", "Note:".yellow().bold(), p.display(), e);
+                    eprintln!(
+                        "{} could not remove binary {}: {}",
+                        "Note:".yellow().bold(),
+                        p.display(),
+                        e
+                    );
                     eprintln!("  Remove it manually, e.g.: sudo rm {}", p.display());
                 }
             }
@@ -439,7 +483,11 @@ fn remove_path_block() {
             }
         }
         if std::fs::write(&path, out).is_ok() {
-            println!("{} removed PATH entry from {}", "✓".green().bold(), path.display());
+            println!(
+                "{} removed PATH entry from {}",
+                "✓".green().bold(),
+                path.display()
+            );
         }
     }
 }
@@ -447,7 +495,12 @@ fn remove_path_block() {
 /// Registers (or updates) an upstream provider and persists it to disk.
 /// Resolves the endpoint from flags, a known preset, or an interactive picker,
 /// then discovers the provider's models from its `/models` endpoint.
-async fn provider_add(name: Option<String>, url: Option<String>, key_env: Option<String>, api_key: Option<String>) {
+async fn provider_add(
+    name: Option<String>,
+    url: Option<String>,
+    key_env: Option<String>,
+    api_key: Option<String>,
+) {
     let resolved = if let Some(u) = url {
         // Explicit custom endpoint.
         let n = name.unwrap_or_else(|| derive_name(&u));
@@ -455,7 +508,9 @@ async fn provider_add(name: Option<String>, url: Option<String>, key_env: Option
     } else if let Some(n) = name {
         // Known provider by name (e.g. `provider add --name groq`).
         match preset(&n) {
-            Some((base_url, default_key)) => Some((n, base_url, key_env.clone().unwrap_or(default_key), api_key)),
+            Some((base_url, default_key)) => {
+                Some((n, base_url, key_env.clone().unwrap_or(default_key), api_key))
+            }
             None => {
                 eprintln!(
                     "{}: unknown provider '{}'. Pass --url for a custom endpoint.",

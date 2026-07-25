@@ -1,14 +1,13 @@
-use std::collections::HashMap;
 use once_cell::sync::Lazy;
 use regex::Regex;
+use std::collections::HashMap;
 
 /// Matches a complete pseudonymization token like `[EMAIL_1]` or
 /// `[CONNECTION_STRING_12]`. The trailing `_<digits>]` is deliberate: it means
 /// the token regex never collides with irreversible redaction tags
 /// (`[EMAIL_REDACTED]`) or block markers (`[BLOCKED_EMAIL]`), so rehydration
 /// only ever touches values it actually minted.
-pub static TOKEN_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"\[[A-Z][A-Z_]*_\d+\]").unwrap());
+pub static TOKEN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\[[A-Z][A-Z_]*_\d+\]").unwrap());
 
 /// Per-request, in-memory bidirectional map between real PII values and their
 /// coherent pseudonymization tokens.
