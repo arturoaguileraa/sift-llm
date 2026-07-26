@@ -6,11 +6,11 @@
 and any OpenAI/Anthropic-compatible tool) and the model API, and strips sensitive
 data from your prompts before they ever leave your machine.
 
-> Status: work in progress. Regex detection, a policy engine (shadow/enforce),
-> multi-provider routing with model discovery, and **reversible pseudonymization with
-> response rehydration** (buffered and streaming, including tool-call arguments) work
-> today. Next: semantic (NER) detection and native Anthropic support. See
-> [Roadmap](#roadmap).
+> Status: work in progress. Regex detection, **semantic NER detection** (names, orgs,
+> locations via a local GLiNER model), a policy engine (shadow/enforce), multi-provider
+> routing, and **reversible pseudonymization with response rehydration** (buffered and
+> streaming, including tool-call arguments) work today. Next: native Anthropic support.
+> See [Roadmap](#roadmap).
 
 ![Sift demo](docs/demo.gif)
 
@@ -233,6 +233,7 @@ Sift's OpenAI-compatible surface without reimplementing each provider's native p
 | `sift models` | List every model exposed to the agent, each tagged `(Sift secured)`. |
 | `sift status` | Check whether the gateway is running (and its PID). |
 | `sift scan <file>` | One-off diagnostic: show what would be detected/redacted. Not the proxy, just a tool to test your policy. |
+| `sift model pull` | Download the local GLiNER model (~183 MB, one time) that powers semantic NER detection (person names, organizations, locations). Without it, Sift still detects structured secrets via regex. |
 | `sift uninstall` | Remove Sift's config, the OpenCode provider entry, the PATH block and the binary. `--yes` skips the prompt; `--keep-binary` keeps the binary. |
 
 The demo gif above shows `serve`, `models`, the live `/v1/models` endpoint, and
@@ -251,7 +252,10 @@ once, point your agent at it, and it protects every request automatically.
 - [x] Phase 4: tool-call and tool-result handling — tool-call `arguments` are
       rehydrated in both buffered and streamed responses; tool-result content in the
       request is scanned like any other field by the recursive redactor.
-- [ ] Phase 5: semantic detection (NER via ONNX)
+- [x] Phase 5: semantic detection — a local GLiNER model (ONNX via `gline-rs`/`ort`,
+      statically linked so `sift` stays a single self-contained binary) catches
+      contextual PII (names, orgs, locations) that regex misses. `sift model pull`
+      fetches the model on demand; missing model degrades to regex-only.
 - [ ] Native provider protocols (Gemini `generateContent`, Anthropic `/v1/messages`),
       not just the OpenAI-compatible `/v1/chat/completions` surface
 

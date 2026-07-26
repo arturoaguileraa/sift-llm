@@ -8,14 +8,20 @@ mode: shadow
 #   block         reject the whole request before it reaches the model (400)
 #   pass          leave untouched (functional data the model needs)
 policies:
+  # Structured secrets & PII (regex-detected)
   api_key:           pseudonymize   # or `block` if you'd rather reject such requests
   private_key:       pseudonymize
   password:          pseudonymize
   credit_card:       pseudonymize
   connection_string: pseudonymize
   email:             pseudonymize
-  person_name:       pseudonymize
   ip_address:        pass           # left untouched
+  # Contextual PII (semantic NER — needs `sift model pull`; ignored if the model is absent)
+  person_name:       pseudonymize
+  organization:      pseudonymize
+  location:          pass           # often functional in coding; tokenize if sensitive
+  address:           pseudonymize
+  phone:             pseudonymize
 
 allowlist:
   - "example.com"
