@@ -1,6 +1,6 @@
 [package]
 name = "sift"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
 authors = ["Arturo Aguilera"]
 description = "A local PII gateway and privacy proxy for AI coding agents."
