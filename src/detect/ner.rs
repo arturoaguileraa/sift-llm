@@ -137,3 +137,38 @@ fn locate(
     // Fallback: locate the exact matched text.
     text.find(expected).map(|b| (b, b + expected.len()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn locate_resolves_char_offsets_to_bytes_with_accents() {
+        // "ñ" is 2 bytes, so the char offset of "X" (1) differs from its byte offset (2).
+        // locate must return byte offsets whose slice equals the expected text.
+        assert_eq!(locate("ñX", (1, 2), "X"), Some((2, 3)));
+
+        // A realistic Spanish span: byte offsets must land exactly on the entity.
+        let text = "Contacta a María Pérez en Madrid";
+        let target = "María Pérez";
+        let char_start = text[..text.find(target).unwrap()].chars().count();
+        let char_end = char_start + target.chars().count();
+        let (bs, be) = locate(text, (char_start, char_end), target).unwrap();
+        assert_eq!(&text[bs..be], target);
+    }
+
+    #[test]
+    fn locate_falls_back_to_exact_text_when_offsets_are_off() {
+        // Offsets out of range → fall back to searching the exact text.
+        assert_eq!(locate("abcXdef", (99, 100), "X"), Some((3, 4)));
+    }
+
+    #[test]
+    fn category_for_maps_known_labels_and_normalizes_unknowns() {
+        assert_eq!(category_for("person"), "person_name");
+        assert_eq!(category_for("phone number"), "phone");
+        assert_eq!(category_for("credit card number"), "credit_card");
+        // Unknown label: normalized (spaces -> underscores) rather than dropped.
+        assert_eq!(category_for("job title"), "job_title");
+    }
+}

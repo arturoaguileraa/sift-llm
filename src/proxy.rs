@@ -579,4 +579,86 @@ mod tests {
             "to"
         );
     }
+
+    #[test]
+    fn request_without_pii_is_left_untouched() {
+        let engine = enforce_engine();
+        let detector = Detector::new();
+        let mut vault = Vault::new();
+        let mut payload = json!({
+            "model": "x",
+            "messages": [{ "role": "user", "content": "hola que tal" }]
+        });
+        let original = payload.clone();
+        let audit = redact_json_value(&mut payload, &engine, &detector, &mut vault);
+        assert_eq!(payload, original, "no PII => payload unchanged");
+        assert!(vault.is_empty());
+        assert!(audit.is_empty());
+    }
+
+    #[test]
+    fn same_value_gets_one_coherent_token_across_messages() {
+        let engine = enforce_engine();
+        let detector = Detector::new();
+        let mut vault = Vault::new();
+        let mut payload = json!({
+            "model": "x",
+            "messages": [
+                { "role": "user", "content": "mail juan@empresa.com" },
+                { "role": "assistant", "content": "noted juan@empresa.com" }
+            ]
+        });
+        redact_json_value(&mut payload, &engine, &detector, &mut vault);
+        for i in 0..2 {
+            assert!(payload["messages"][i]["content"]
+                .as_str()
+                .unwrap()
+                .contains("[EMAIL_1]"));
+        }
+        assert!(!serde_json::to_string(&payload)
+            .unwrap()
+            .contains("juan@empresa.com"));
+    }
+
+    #[test]
+    fn allowlisted_value_passes_through_untokenized() {
+        // The default allowlist includes example.com.
+        let engine = enforce_engine();
+        let detector = Detector::new();
+        let mut vault = Vault::new();
+        let mut payload = json!({
+            "model": "x",
+            "messages": [{ "role": "user", "content": "write to bob@example.com" }]
+        });
+        redact_json_value(&mut payload, &engine, &detector, &mut vault);
+        assert_eq!(
+            payload["messages"][0]["content"],
+            "write to bob@example.com"
+        );
+        assert!(vault.is_empty());
+    }
+
+    #[test]
+    fn block_policy_surfaces_a_block_record() {
+        // A `block` category in enforce mode yields a Block audit record — which is what
+        // the handler checks to reject the request with a 400 before it reaches the LLM.
+        let mut policies = HashMap::new();
+        policies.insert("api_key".to_string(), Action::Block);
+        let engine = PolicyEngine::new(PolicyConfig {
+            mode: Mode::Enforce,
+            policies,
+            allowlist: vec![],
+        });
+        let detector = Detector::new();
+        let mut vault = Vault::new();
+        let mut payload = json!({
+            "model": "x",
+            "messages": [{
+                "role": "user",
+                "content": "key sk-ant-api03-12345678901234567890123456789012-AA"
+            }]
+        });
+        let audit = redact_json_value(&mut payload, &engine, &detector, &mut vault);
+        assert!(audit.iter().any(|r| r.action_taken == Action::Block));
+    }
 }
