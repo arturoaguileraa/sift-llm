@@ -25,3 +25,7 @@ daemonize = "0.5"
 zeroize = "1"
 gline-rs = "1"
 orp = "0.9"
+# Pull ONNX Runtime as a downloaded, statically-linked binary so `sift` is a single
+# self-contained file (no dependency on a system libonnxruntime). Version pinned to the
+# one gline-rs uses; feature unification enables the download for its ort too.
+ort = { version = "=2.0.0-rc.9", features = ["download-binaries"] }
