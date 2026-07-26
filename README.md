@@ -233,7 +233,7 @@ Sift's OpenAI-compatible surface without reimplementing each provider's native p
 | `sift models` | List every model exposed to the agent, each tagged `(Sift secured)`. |
 | `sift status` | Check whether the gateway is running (and its PID). |
 | `sift scan <file>` | One-off diagnostic: show what would be detected/redacted. Not the proxy, just a tool to test your policy. |
-| `sift model pull` | Download the local GLiNER model (~183 MB, one time) that powers semantic NER detection (person names, organizations, locations). Without it, Sift still detects structured secrets via regex. |
+| `sift model pull` | Manually (re)download the local GLiNER model that powers semantic NER. Usually not needed: it is fetched automatically at install time and on first `serve`. |
 | `sift uninstall` | Remove Sift's config, the OpenCode provider entry, the PATH block and the binary. `--yes` skips the prompt; `--keep-binary` keeps the binary. |
 
 The demo gif above shows `serve`, `models`, the live `/v1/models` endpoint, and

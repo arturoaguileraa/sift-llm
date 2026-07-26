@@ -16,7 +16,7 @@ policies:
   connection_string: pseudonymize
   email:             pseudonymize
   ip_address:        pass           # left untouched
-  # Contextual PII (semantic NER — needs `sift model pull`; ignored if the model is absent)
+  # Contextual PII (semantic NER — model auto-downloads on install/first run; ignored if absent)
   person_name:       pseudonymize
   organization:      pseudonymize
   location:          pass           # often functional in coding; tokenize if sensitive

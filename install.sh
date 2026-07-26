@@ -210,6 +210,13 @@ chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
 
 log_success "Sift installed successfully to ${INSTALL_DIR}/${BINARY_NAME}"
 
+# Pre-fetch the semantic NER model (~183 MB) so PII detection works out of the box.
+# Best-effort: if it fails (offline, etc.), Sift downloads it on first `serve` instead.
+log_info "Downloading the semantic detection model (~183 MB, one time)..."
+if ! "${INSTALL_DIR}/${BINARY_NAME}" model pull; then
+  log_info "Model download skipped; Sift will fetch it automatically on first 'serve'."
+fi
+
 # Ensure INSTALL_DIR is on PATH, managed as a delimited block so `sift uninstall`
 # can remove it cleanly later.
 SIFT_PATH_START="# >>> sift-llm >>>"

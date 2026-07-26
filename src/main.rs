@@ -201,6 +201,7 @@ async fn run(cli: Cli) {
                     "sift status".cyan()
                 );
             }
+            ensure_model().await;
             let detector = build_detector();
             if let Err(e) = run_proxy(port, policy_engine, detector).await {
                 eprintln!("{}: {}", "Error starting proxy".red().bold(), e);
@@ -383,59 +384,79 @@ async fn run(cli: Cli) {
     }
 }
 
+/// True when the NER model files are already present on disk.
+fn model_present() -> bool {
+    let dir = model_dir();
+    dir.join("model.onnx").exists() && dir.join("tokenizer.json").exists()
+}
+
 /// Downloads the GLiNER NER model (int8 ONNX + tokenizer) into ~/.config/sift/models/
 /// gliner. Uses the gline-rs-compatible `onnx-community/gliner_small-v2.1` export.
-async fn model_pull() {
+/// Returns an error string instead of exiting, so callers decide how to handle failure.
+async fn download_model() -> Result<(), String> {
     const BASE: &str = "https://huggingface.co/onnx-community/gliner_small-v2.1/resolve/main";
     let files = [
         ("onnx/model_int8.onnx", "model.onnx"),
         ("tokenizer.json", "tokenizer.json"),
     ];
     let dir = model_dir();
-    if let Err(e) = fs::create_dir_all(&dir) {
-        eprintln!(
-            "{}: cannot create {}: {}",
-            "Error".red().bold(),
-            dir.display(),
-            e
-        );
-        std::process::exit(1);
-    }
+    fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     let client = reqwest::Client::new();
     for (remote, local) in files {
         let url = format!("{BASE}/{remote}");
         print!("{} downloading {} ... ", "==>".blue().bold(), local);
         io::stdout().flush().ok();
-        let bytes = match client
+        let resp = client
             .get(&url)
             .send()
             .await
             .and_then(|r| r.error_for_status())
-        {
-            Ok(resp) => match resp.bytes().await {
-                Ok(b) => b,
-                Err(e) => {
-                    println!("{}", format!("failed ({e})").red());
-                    std::process::exit(1);
-                }
-            },
-            Err(e) => {
-                println!("{}", format!("failed ({e})").red());
-                std::process::exit(1);
-            }
-        };
-        if let Err(e) = fs::write(dir.join(local), &bytes) {
-            println!("{}", format!("write failed ({e})").red());
-            std::process::exit(1);
-        }
+            .map_err(|e| format!("download failed: {e}"))?;
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| format!("download failed: {e}"))?;
+        fs::write(dir.join(local), &bytes).map_err(|e| format!("write failed: {e}"))?;
         println!("{}", format!("{:.1} MB", bytes.len() as f64 / 1e6).green());
     }
+    Ok(())
+}
+
+/// `sift model pull`: download the model, reporting the outcome.
+async fn model_pull() {
+    match download_model().await {
+        Ok(()) => println!(
+            "{} model ready in {}. Restart {} to enable semantic detection.",
+            "✓".green().bold(),
+            model_dir().display(),
+            "sift serve".cyan()
+        ),
+        Err(e) => {
+            eprintln!("{}: {}", "Error".red().bold(), e);
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Ensures the NER model is present, downloading it on first run. Best-effort: if the
+/// download fails, we warn and carry on with regex-only detection rather than blocking
+/// the gateway from starting.
+async fn ensure_model() {
+    if model_present() {
+        return;
+    }
     println!(
-        "{} model ready in {}. Restart {} to enable semantic detection.",
-        "✓".green().bold(),
-        dir.display(),
-        "sift serve".cyan()
+        "{} first run: downloading the semantic NER model (~183 MB, one time)...",
+        "==>".blue().bold()
     );
+    if let Err(e) = download_model().await {
+        println!(
+            "{} could not download NER model ({}). Running regex-only; retry with {}.",
+            "Note:".yellow().bold(),
+            e,
+            "sift model pull".cyan()
+        );
+    }
 }
 
 /// Stops a background gateway using the pid file. When `verbose`, reports outcome.
