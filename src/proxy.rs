@@ -407,7 +407,7 @@ fn redact_json_value(
         }
         Value::Object(obj) => {
             for (k, v) in obj.iter_mut() {
-                if k == "model" || k == "role" || k == "id" {
+                if skip_redaction(k) {
                     continue;
                 }
                 audit_trail.append(&mut redact_json_value(v, engine, detector, vault));
@@ -416,6 +416,20 @@ fn redact_json_value(
         _ => {}
     }
     audit_trail
+}
+
+/// Whether a JSON object key names a subtree we must NOT redact. Two reasons:
+///  - identity/routing fields (`model`, `role`, `id`) aren't PII;
+///  - `tools`/`functions`/`tool_choice`/`response_format` are *structural* schema
+///    definitions. Tokenizing a word inside a tool's JSON schema (e.g. a property name
+///    in `required`) corrupts the request — the provider rejects it with
+///    "schema ... requires unspecified property '[PERSON_NAME_1]'". Only conversation
+///    content (message text, tool-call arguments) should be pseudonymized.
+fn skip_redaction(key: &str) -> bool {
+    matches!(
+        key,
+        "model" | "role" | "id" | "tools" | "functions" | "tool_choice" | "response_format"
+    )
 }
 
 #[cfg(test)]
@@ -522,5 +536,47 @@ mod tests {
         ] {
             assert!(path.as_str().unwrap().contains("[EMAIL_1]"));
         }
+    }
+
+    #[test]
+    fn tool_definitions_are_not_redacted() {
+        // Structural tool schemas must survive untouched — tokenizing a word inside them
+        // corrupts the request (the provider rejects an "unspecified property"). Only the
+        // conversation content should be pseudonymized.
+        let engine = enforce_engine();
+        let detector = Detector::new();
+        let mut vault = Vault::new();
+        let mut payload = json!({
+            "model": "x",
+            "messages": [{ "role": "user", "content": "mail juan@empresa.com" }],
+            "tools": [{
+                "type": "function",
+                "function": {
+                    "name": "send_email",
+                    "description": "emails admin@corp.com",
+                    "parameters": {
+                        "type": "object",
+                        "properties": { "to": { "type": "string" } },
+                        "required": ["to"]
+                    }
+                }
+            }]
+        });
+        redact_json_value(&mut payload, &engine, &detector, &mut vault);
+
+        // Message content is pseudonymized...
+        assert!(payload["messages"][0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("[EMAIL_1]"));
+        // ...but the tool definition (even an email inside it) is left exactly as-is.
+        assert_eq!(
+            payload["tools"][0]["function"]["description"],
+            "emails admin@corp.com"
+        );
+        assert_eq!(
+            payload["tools"][0]["function"]["parameters"]["required"][0],
+            "to"
+        );
     }
 }
