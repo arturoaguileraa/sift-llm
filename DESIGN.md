@@ -44,7 +44,7 @@ pipeline y reenvía. La conversación fluye sin que opencode note nada.
 PETICIÓN:
  [1] Adaptador de esquema    OpenAI/Anthropic → forma canónica interna
  [2] Extractor de contenido  system, messages, tool defs, tool_results, imágenes
- [3] Detector                regex+validadores (MVP) → NER vía ort (fase 2)
+ [3] Detector                regex (estructurado) + NER GLiNER vía ort (semántico)
  [4] Motor de políticas       pass / pseudonymize / block / ask, por categoría
  [5] Pseudonimizador          consulta/escribe el VAULT, sustituye en el body
  [6] Reserializador           vuelve al esquema del proveedor y reenvía
@@ -64,11 +64,10 @@ RESPUESTA (streaming):
 | Cliente HTTP (reenvío con streaming) | `reqwest` (feature `stream`) |
 | Parseo/serialización JSON | `serde` + `serde_json` |
 | Detección regex | `regex` |
-| SSE (streaming del proveedor) | parseo manual o `eventsource-stream` |
-| Vault cifrado en memoria | `aes-gcm` (RustCrypto) + `zeroize` |
+| Detección semántica (NER) | `gline-rs` (GLiNER) sobre `ort` (ONNX Runtime), modelo `gliner_small-v2.1` int8; ONNX Runtime **linkado estático** para un binario único autocontenido |
+| SSE (streaming del proveedor) | parseo manual de eventos `data:` |
+| Vault en memoria | `zeroize` (borra la PII al soltar el vault por petición) |
 | Config de políticas | `serde_yaml` |
-| Mapa de sesión concurrente | `dashmap` |
-| NER en proceso (fase 2) | `ort` (ONNX Runtime) con un modelo PII exportado |
 
 ## 6. El vault
 
@@ -147,6 +146,26 @@ trata en tres puntos:
   ficheros.
 - **ejecución de la tool.** Punto ciego, fuera de alcance.
 
+**Importante: NO se redactan las DEFINICIONES de tools.** El detector recorre el
+contenido de la conversación (texto de mensajes, `arguments` de tool_calls), pero
+**salta** las claves estructurales (`tools`, `functions`, `tool_choice`,
+`response_format`). Tokenizar una palabra dentro del esquema JSON de una función
+(p. ej. un nombre de propiedad en `required`) corrompe la petición y el proveedor la
+rechaza (`schema ... requires unspecified property '[PERSON_NAME_1]'`). Esto lo destapó
+el NER, que matchea palabras comunes; el regex casi nunca lo hacía.
+
+### Passthrough de estado opaco del proveedor (thought_signature)
+
+Algunos proveedores adjuntan a los tool_calls datos opacos que deben devolverse tal
+cual en el turno siguiente. El caso guía: los modelos **Gemini 3 "thinking"** ponen un
+`extra_content.google.thought_signature` en cada function call y rechazan la
+continuación (`400 "missing thought_signature"`) si no vuelve. Los clientes
+OpenAI-compat genéricos (opencode) tiran ese campo. Como Sift ve la respuesta,
+**captura** ese `extra_content` (indexado por `id` del tool_call) y lo **re-inyecta** en
+el tool_call correspondiente de la siguiente petición. Así funcionan esos modelos a
+través de la superficie OpenAI-compat de Sift **sin** reimplementar el protocolo nativo
+de cada proveedor (módulo `signature.rs`).
+
 ## 9. Streaming (la parte fina)
 
 El `SseRehydrator` trabaja a dos niveles porque un token se puede partir de dos formas:
@@ -178,7 +197,8 @@ frame; emails/nombres/IPs no se ven afectados.
    tiende a copiar tal cual.
 3. **Tokenizar puede romper la sintaxis del código.**
 4. **Falsos positivos/negativos.** Umbral de confianza + modo shadow.
-5. **El vault es la joya.** Cifrado en memoria, TTL, zeroize, cero logs del body.
+5. **El vault es la joya.** Hoy: efímero por petición, borrado con `zeroize` al soltarlo,
+   cero logs del body. Cifrado en memoria + TTL solo aplicarían al vault por sesión (3b).
 6. **Rompe el prompt caching del proveedor** si el contenido muta; la coherencia
    del vault ayuda pero hay que vigilar coste.
 7. **Punto ciego de egress** en la ejecución de tools.
@@ -215,26 +235,46 @@ añadiendo features hasta la anonimización reversible completa.
   array JSON nunca se confunde con un token `[TIPO_N]`). Los tool_results de la petición
   ya se escanean como cualquier otro campo por la redacción recursiva. Punto ciego que
   queda: la ejecución de la tool (egress fuera del modelo), fuera de alcance.
-- **Fase 5 — NER (`ort`).** Detección semántica de nombres/direcciones más allá de
-  los patrones regex.
-- **Fase 6 — Multiproveedor.** Adaptador canónico para Anthropic además de OpenAI.
+- **Fase 5 — NER (IMPLEMENTADA).** Detección semántica de nombres/organizaciones/
+  ubicaciones más allá del regex, con un modelo **GLiNER** (`gliner_small-v2.1` int8)
+  ejecutado en local vía `gline-rs`/`ort`. Compuesta con el regex (regex = secretos
+  estructurados; NER = PII contextual). ONNX Runtime va **linkado estático** → `sift`
+  sigue siendo un binario único autocontenido (~29 MB); el modelo (~183 MB) se descarga
+  bajo demanda (`sift model pull`, o automático en install/primer arranque) a
+  `~/.config/sift/models/gliner`; si falta, degrada a solo-regex. El `person_name` de
+  `policies.yaml` ya funciona. Pendiente: umbral configurable (hoy 0.5), y medir/optimizar
+  la latencia sobre system prompts grandes.
+- **Fase 6 — Multiproveedor / protocolos nativos.** Hoy Sift habla **solo
+  OpenAI-compat** (`/v1/chat/completions`), y por eso Gemini pasa por su endpoint compat
+  (que exige el `thought_signature` que ya reinyectamos, ver §8). Pendiente: adaptadores
+  de protocolo **nativo** (Gemini `generateContent`, Anthropic `/v1/messages`).
 - **Futuro opcional.** Multimedia (OCR + block), modo `ask` interactivo.
 
 ## 12. Estructura del repo
 
+Estructura real actual (no la aspiracional; aún no hay `schema/` canónico porque solo
+se habla OpenAI-compat):
+
 ```
 sift-llm/
 ├── Cargo.toml
+├── .cargo/config.toml     # fuerza ONNX Runtime estático (evita el del sistema)
 ├── src/
-│   ├── main.rs            # arranque, axum, rutas
-│   ├── proxy.rs           # recepción + reenvío con streaming
-│   ├── schema/            # adaptadores (openai.rs, anthropic.rs, canonical.rs)
-│   ├── detect/            # regex.rs, entropy.rs, ner.rs (fase 2)
-│   ├── policy.rs          # carga de config + motor de decisiones
-│   ├── vault.rs           # mapa bidireccional cifrado por sesión
-│   ├── rehydrate.rs       # buffer de ventana deslizante
-│   └── audit.rs           # registro
+│   ├── main.rs            # CLI (clap), arranque, comandos, model pull, auto-download
+│   ├── proxy.rs           # axum, /v1/chat/completions, redacción + rehidratación + reenvío
+│   ├── detect/
+│   │   ├── mod.rs         # Detector compuesto (regex + NER opcional)
+│   │   ├── regex.rs       # patrones estructurados (claves, email, IBAN, connection string…)
+│   │   └── ner.rs         # NerDetector (GLiNER vía gline-rs/ort)
+│   ├── policy.rs          # config YAML + motor pass/redact/pseudonymize/block, shadow/enforce
+│   ├── vault.rs           # mapa bidireccional por petición (zeroize al soltar)
+│   ├── rehydrate.rs       # rehidratación buffered + SseRehydrator (ventana deslizante)
+│   ├── signature.rs       # passthrough de thought_signature (§8)
+│   ├── provider.rs        # registro multiproveedor + descubrimiento de modelos
+│   ├── opencode.rs        # sync del provider en la config de opencode
+│   └── audit.rs           # logs ↑ pseudonimizar / ↓ rehidratar
 ├── policies.yaml
+├── install.sh             # descarga binario + modelo NER
 └── README.md
 ```
 
@@ -312,8 +352,8 @@ Se evaluó Go vs Rust. Se eligió **Rust** por tres razones para este proyecto:
 
 1. El rehidratador sobre streaming es una máquina de estados con tokens partidos
    entre chunks; los enums y el pattern matching de Rust lo modelan sin errores.
-2. El NER en fase 2 se hace en proceso con `ort` (ONNX Runtime), mejor soportado en
-   Rust que en Go.
+2. El NER se ejecuta en proceso con `ort` (ONNX Runtime), mejor soportado en Rust que
+   en Go, y linkable estático en un binario único (se confirmó en la práctica).
 3. Se maneja un vault con PII en memoria; Rust permite borrarlo de forma
    determinista (`zeroize`) sin recolector de basura.
 
