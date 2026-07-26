@@ -503,6 +503,9 @@ fn uninstall(yes: bool, keep_binary: bool) {
 
     println!("{}", "This will remove:".bold());
     println!("  - Sift config directory: {}", dir.display());
+    if model_present() {
+        println!("  - The downloaded semantic NER model (~183 MB)");
+    }
     println!("  - The 'sift-llm' provider from your OpenCode config");
     println!("  - The Sift PATH block from your shell rc (if present)");
     if !keep_binary {
