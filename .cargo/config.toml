@@ -1,0 +1,8 @@
+# Force `ort` to download and statically link its own ONNX Runtime instead of picking up
+# a system copy via pkg-config (e.g. Homebrew's, which spams benign "Schema error"
+# schema-registration warnings on stderr). This keeps local dev builds identical to
+# CI/release — one clean, self-contained static onnxruntime — and silences that noise.
+# ort is the only pkg-config consumer here, so disabling pkg-config discovery is safe.
+[env]
+PKG_CONFIG_LIBDIR = { value = "/nonexistent", force = true }
+PKG_CONFIG_PATH = { value = "", force = true }
